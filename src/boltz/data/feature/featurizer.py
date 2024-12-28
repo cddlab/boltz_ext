@@ -696,6 +696,7 @@ def process_atom_features(
     ref_atom_name_chars = from_numpy(atom_data["name"]).long()
     ref_element = from_numpy(atom_data["element"]).long()
     ref_charge = from_numpy(atom_data["charge"])
+    ref_chirality = from_numpy(atom_data["chirality"])
     ref_pos = from_numpy(
         atom_data["conformer"].copy()
     )  # not sure why I need to copy here..
@@ -750,6 +751,7 @@ def process_atom_features(
         resolved_mask = pad_dim(resolved_mask, 0, pad_len)
         ref_element = pad_dim(ref_element, 0, pad_len)
         ref_charge = pad_dim(ref_charge, 0, pad_len)
+        ref_chirality = pad_dim(ref_chirality, 0, pad_len)
         ref_atom_name_chars = pad_dim(ref_atom_name_chars, 0, pad_len)
         ref_space_uid = pad_dim(ref_space_uid, 0, pad_len)
         coords = pad_dim(coords, 1, pad_len)
@@ -772,6 +774,7 @@ def process_atom_features(
         "atom_resolved_mask": resolved_mask,
         "ref_element": ref_element,
         "ref_charge": ref_charge,
+        "ref_chirality": ref_chirality,
         "ref_atom_name_chars": ref_atom_name_chars,
         "ref_space_uid": ref_space_uid,
         "coords": coords,

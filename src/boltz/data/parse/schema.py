@@ -23,13 +23,15 @@ from boltz.data.types import (
     StructureInfo,
     Target,
 )
+from boltz.model.modules.restraints import Restraints
+
 
 ####################################################################################################
 # DATACLASSES
 ####################################################################################################
 
 
-@dataclass(frozen=True)
+@dataclass
 class ParsedAtom:
     """A parsed atom object."""
 
@@ -40,6 +42,7 @@ class ParsedAtom:
     conformer: tuple[float, float, float]
     is_present: bool
     chirality: int
+    restraint: int = 0
 
 
 @dataclass(frozen=True)
@@ -271,6 +274,7 @@ def parse_ccd_residue(
     atom_idx = 0
     idx_map = {}  # Used for bonds later
 
+    chiral_aids = []
     for i, atom in enumerate(ref_mol.GetAtoms()):
         # Get atom name, charge, element and reference coordinates
         atom_name = atom.GetProp("name")
@@ -281,6 +285,8 @@ def parse_ccd_residue(
         chirality_type = const.chirality_type_ids.get(
             atom.GetChiralTag(), unk_chirality
         )
+        if atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED:
+            chiral_aids.append(i)
 
         # Get PDB coordinates, if any
         coords = (0, 0, 0)
@@ -301,6 +307,19 @@ def parse_ccd_residue(
         idx_map[i] = atom_idx
         atom_idx += 1  # noqa: SIM113
 
+    # Load chirality restraints
+    restr = Restraints.get_instance()
+    for i in chiral_aids:
+        ch = Restraints.make_chiral(i, ref_mol, conformer)
+        ind0, ind1, ind2, ind3 = restr.add_chiral_data(ch)
+        print(f"{i=} {ch.aid1=} {ch.aid2=} {ch.aid3=}")
+        print(f"   {ind0=} {ind1=} {ind2=} {ind3=}")
+
+        restr.register_site(atoms, i, ind0)
+        restr.register_site(atoms, ch.aid1, ind1)
+        restr.register_site(atoms, ch.aid2, ind2)
+        restr.register_site(atoms, ch.aid3, ind3)
+
     # Load bonds
     bonds = []
     unk_bond = const.bond_type_ids[const.unk_bond_type]
@@ -319,6 +338,9 @@ def parse_ccd_residue(
         bond_type = bond.GetBondType().name
         bond_type = const.bond_type_ids.get(bond_type, unk_bond)
         bonds.append(ParsedBond(start, end, bond_type))
+
+        # Add bond restraints
+        restr.make_bond(idx_1, idx_2, ref_mol, conformer, atoms)
 
     unk_prot_id = const.unk_token_ids["PROTEIN"]
     return ParsedResidue(
