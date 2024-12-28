@@ -34,6 +34,7 @@ from boltz.model.modules.utils import (
     default,
     log,
 )
+from boltz.model.modules.restraints import Restraints
 
 
 class DiffusionModule(Module):
@@ -384,6 +385,8 @@ class AtomDiffusion(Module):
 
         self.register_buffer("zero", torch.tensor(0.0), persistent=False)
 
+        self.restr_step_after = 150
+
     @property
     def device(self):
         return next(self.score_model.parameters()).device
@@ -453,6 +456,16 @@ class AtomDiffusion(Module):
         train_accumulate_token_repr=False,
         **network_condition_kwargs,
     ):
+        feats = network_condition_kwargs["feats"]
+        feat_restr = feats["ref_restraint"][0]
+        restr = Restraints.get_instance()
+        for i in range(len(feat_restr)):
+            sid = int(feat_restr[i])
+            if sid == 0:
+                continue
+            print(f"{i}: {sid=}")
+            restr.setup_chiral_data(i, sid)
+
         num_sampling_steps = default(num_sampling_steps, self.num_sampling_steps)
         atom_mask = atom_mask.repeat_interleave(multiplicity, 0)
 
@@ -473,6 +486,7 @@ class AtomDiffusion(Module):
         token_a = None
 
         # gradually denoise
+        i = 0
         for sigma_tm, sigma_t, gamma in sigmas_and_gammas:
             atom_coords, atom_coords_denoised = center_random_augmentation(
                 atom_coords,
@@ -503,6 +517,8 @@ class AtomDiffusion(Module):
                         **network_condition_kwargs,
                     ),
                 )
+            if i > self.restr_step_after:
+                restr.minimize(atom_coords_denoised[0])
 
             if self.accumulate_token_repr:
                 if token_repr is None:
@@ -536,6 +552,7 @@ class AtomDiffusion(Module):
             )
 
             atom_coords = atom_coords_next
+            i += 1
 
         return dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
 
