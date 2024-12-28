@@ -795,6 +795,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                         atom.conformer,
                         atom.is_present,
                         atom.chirality,
+                        atom.restraint,
                     )
                 )
                 atom_idx += 1

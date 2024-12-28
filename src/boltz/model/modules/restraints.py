@@ -384,8 +384,6 @@ class Restraints:
         self.register_site(atoms, ai, (bnd, 0))
         self.register_site(atoms, aj, (bnd, 1))
 
-        # return (bnd, 0), (bnd, 1)
-
     def __init__(self):
         self.chiral_data = []
         self.bond_data = []
@@ -396,29 +394,16 @@ class Restraints:
 
     def add_chiral_data(self, ch):
         self.chiral_data.append(ch)
-        # ind = len(self.chiral_data) - 1
         return (ch, 0), (ch, 1), (ch, 2), (ch, 3)
-        # return (ind, 0), (ind, 1), (ind, 2), (ind, 3)
-        # assert ind < (1 << 16)
-        # return ind, ind + 1 * 0x10000, ind + 2 * 0x10000, ind + 3 * 0x10000
 
     def register_site(self, atoms, i, value):
-        sid = atoms[i].chirality
+        sid = atoms[i].restraint
         if sid == 0:
             self.sites.append([value])
             new_sid = len(self.sites)
-            atoms[i].chirality = new_sid
+            atoms[i].restraint = new_sid
         else:
             self.sites[sid - 1].append(value)
-
-    # def register_site(self, index, value):
-    #     if index == 0:
-    #         self.sites.append([value])
-    #         new_ind = len(self.sites)
-    #         return new_ind
-    #     else:
-    #         self.sites[index - 1].append(value)
-    #         return index
 
     def get_sites(self, index):
         if index == 0:
@@ -429,9 +414,6 @@ class Restraints:
         if val == 0:
             return
         sites = self.get_sites(val)
-        # for val0, aid in sites:
-        #     print(f"{ind} {val=:X}: {val0=} {aid=}")
-        #     ch = self.chiral_data[val0]
         for ch, aid in sites:
             ch.setup(ind, aid)
 
