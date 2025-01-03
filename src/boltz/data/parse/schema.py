@@ -310,15 +310,7 @@ def parse_ccd_residue(
     # Load chirality restraints
     restr = Restraints.get_instance()
     for i in chiral_aids:
-        ch = Restraints.make_chiral(i, ref_mol, conformer)
-        ind0, ind1, ind2, ind3 = restr.add_chiral_data(ch)
-        print(f"{i=} {ch.aid1=} {ch.aid2=} {ch.aid3=}")
-        print(f"   {ind0=} {ind1=} {ind2=} {ind3=}")
-
-        restr.register_site(atoms, i, ind0)
-        restr.register_site(atoms, ch.aid1, ind1)
-        restr.register_site(atoms, ch.aid2, ind2)
-        restr.register_site(atoms, ch.aid3, ind3)
+        restr.make_chiral(i, ref_mol, conformer, atoms)
 
     # Load bonds
     bonds = []

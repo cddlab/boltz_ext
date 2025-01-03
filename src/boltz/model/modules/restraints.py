@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -7,8 +8,12 @@ import torch
 from scipy import optimize
 
 
+def length(v, eps=1e-6):
+    return math.sqrt(max(eps, v[0] * v[0] + v[1] * v[1] + v[2] * v[2]))
+
+
 def unit_vec(v):
-    vl = np.linalg.norm(v)
+    vl = length(v)
     return v / vl, vl
 
 
@@ -33,28 +38,15 @@ class ChiralData:
     w: float = 1.0
     fmax: float = 100.0
 
-    # set0: bool = False
-    # set1: bool = False
-    # set2: bool = False
-    # set3: bool = False
-
     def setup(self, ind, aid):
         if aid == 0:
-            # assert not self.set0
             self.aid0 = ind
-            # self.set0 = True
         elif aid == 1:
-            # assert not self.set1
             self.aid1 = ind
-            # self.set1 = True
         elif aid == 2:
-            # assert not self.set2
             self.aid2 = ind
-            # self.set2 = True
         elif aid == 3:
-            # assert not self.set3
             self.aid3 = ind
-            # self.set3 = True
         else:
             raise ValueError(f"Invalid data {ind=} {aid=}")
 
@@ -157,138 +149,23 @@ class ChiralData:
         grad[self.aid3] += f3
         return True
 
-    def restr(self, crds_in):
-        device = crds_in.device
-        crds = crds_in.detach().cpu().numpy()
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        a2 = crds[self.aid2]
-        a3 = crds[self.aid3]
-        v1 = a1 - a0
-        v2 = a2 - a0
-        v3 = a3 - a0
-        vol = np.dot(v1, np.cross(v2, v3))
+    @staticmethod
+    def calc_chiral_vol(iatm, mol, conf):
+        aj = []
+        ajname = []
+        atom = mol.GetAtomWithIdx(iatm)
+        for b in atom.GetBonds():
+            j = b.GetOtherAtom(atom).GetIdx()
+            aj.append(j)
+            ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
+        chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
+        print(f"{chiral_vol=:.2f}")
 
-        if self.chiral > 0:
-            thr = self.chiral - 0.5
-        else:
-            thr = self.chiral + 0.5
-        delta = vol - thr
+        atom_name = atom.GetProp("name")
+        chiral_tag = atom.GetChiralTag()
+        print(f"{iatm=} {atom_name=} {chiral_tag=} {aj} {ajname}")
 
-        # print(f"XXX:{self.aid0} {vol=:.2f} {self.chiral=:.2f} {delta=:.2f}")
-
-        # dE = -sign * 2.0 * delta * self.w
-        dE = 2.0 * delta * self.w
-        # print(f"   {dE=}")
-        eps = 1e-2
-        if thr < 0:
-            dE = max(0, dE)
-            if dE < eps:
-                return False
-        else:
-            dE = min(0, dE)
-            if dE > -eps:
-                return False
-
-        f1 = np.cross(v2, v3) * dE
-        f2 = np.cross(v3, v1) * dE
-        f3 = np.cross(v1, v2) * dE
-        fc = -f1 - f2 - f3
-
-        n1, n1l = unit_vec(f1)
-        n2, n2l = unit_vec(f2)
-        n3, n3l = unit_vec(f3)
-        nc, ncl = unit_vec(fc)
-
-        print(f"   force aver: {(n1l+n2l+n3l+ncl)/4}")
-
-        n1l = min(n1l, self.fmax)
-        n2l = min(n2l, self.fmax)
-        n3l = min(n3l, self.fmax)
-        ncl = min(ncl, self.fmax)
-
-        f1 = -n1 * n1l
-        f2 = -n2 * n2l
-        f3 = -n3 * n3l
-        fc = -nc * ncl
-
-        # crds[self.aid0] += fc
-        # crds[self.aid1] += f1
-        # crds[self.aid2] += f2
-        # crds[self.aid3] += f3
-        # new_vol = calc_chiral_vol(crds, self.aid0, [self.aid1, self.aid2, self.aid3])
-        # print(f"  {new_vol=:.2f} {self.chiral-new_vol=:.2f}")
-
-        crds_in[self.aid0] += torch.tensor(fc).to(device)
-        crds_in[self.aid1] += torch.tensor(f1).to(device)
-        crds_in[self.aid2] += torch.tensor(f2).to(device)
-        crds_in[self.aid3] += torch.tensor(f3).to(device)
-        return True
-
-
-# def decode_chiral_vol(vol):
-#     if vol & 0x80:
-#         vol = vol - 0x100
-#     return vol / 40
-
-
-# def decode_chiral(val: int, aid: int):
-#     a0 = val & 0xFF
-#     if a0 & 0x80:
-#         a0 = a0 - 0x100
-#     a1 = (val >> 8) & 0xFF
-#     if a1 & 0x80:
-#         a1 = a1 - 0x100
-#     a2 = (val >> 16) & 0xFF
-#     if a2 & 0x80:
-#         a2 = a2 - 0x100
-#     chiral = (val >> 24) & 0xFF
-#     chvol = decode_chiral_vol(chiral)
-#     print(f"{a0=}, {a1=}, {a2=}, {chvol=}")
-#     return ChiralData(aid, aid + a0, aid + a1, aid + a2, chvol)
-
-
-# def encode_aid(aid: int) -> int:
-#     if aid < 0:
-#         return (aid + 0x100) & 0xFF
-#     else:
-#         return aid & 0xFF
-
-
-# def encode_chiral_vol(vol):
-#     v = int(vol * 40)
-#     v = max(-128, min(127, v))
-#     chiral_vol = encode_aid()
-#     return chiral_vol
-
-
-# def encode_chiral(iatm, mol, conf):
-#     # aj, chirality_type
-#     aj = []
-#     ajname = []
-#     atom = mol.GetAtomWithIdx(iatm)
-#     for b in atom.GetBonds():
-#         j = b.GetOtherAtom(atom).GetIdx()
-#         aj.append(j)
-#         ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
-#     # chirality_type = const.chirality_type_ids.get(
-#     #     atom.GetChiralTag(), unk_chirality
-#     # )
-#     # chirality_type = encode_chiral(i, aj, chirality_type)
-#     res = encode_aid(aj[0] - iatm)
-#     res += encode_aid(aj[1] - iatm) * 0x100
-#     res += encode_aid(aj[2] - iatm) * 0x10000
-#     chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
-#     print(f"{chiral_vol=:.2f}")
-#     chiral_vol = encode_aid(int(chiral_vol * 40))
-#     print(f"{decode_chiral_vol(chiral_vol)=}")
-#     res += chiral_vol * 0x1000000
-
-#     atom_name = atom.GetProp("name")
-#     chiral_tag = atom.GetChiralTag()
-#     print(f"{iatm=} {atom_name=} {chiral_tag=} {aj} {ajname}--> {res:X}")
-
-#     return res
+        return chiral_vol, aj[0], aj[1], aj[2]
 
 
 @dataclass
@@ -312,7 +189,7 @@ class BondData:
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         v1 = a0 - a1
-        _, n1l = unit_vec(v1)
+        n1l = length(v1)
 
         r2 = self.r0 + self.slack
         r1 = self.r0 - self.slack
@@ -329,7 +206,7 @@ class BondData:
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         v1 = a0 - a1
-        _, n1l = unit_vec(v1)
+        n1l = length(v1)
 
         r2 = self.r0 + self.slack
         r1 = self.r0 - self.slack
@@ -347,6 +224,85 @@ class BondData:
         grad[self.aid1] -= v1 * con
 
 
+@dataclass
+class AngleData:
+    aid0: int
+    aid1: int
+    aid2: int
+    th0: float
+    slack: float = 0.5
+    w: float = 0.1
+    # fmax: float = 100.0
+
+    def setup(self, ind, aid):
+        if aid == 0:
+            self.aid0 = ind
+        elif aid == 1:
+            self.aid1 = ind
+        elif aid == 2:
+            self.aid2 = ind
+        else:
+            raise ValueError(f"Invalid data {ind=} {aid=}")
+
+    @staticmethod
+    def calc_angle(ai, aj, ak, conf):
+        crds = conf.GetPositions()
+        eps = 1e-6
+        theta, _, _, _, _, _ = AngleData._calc_angle_impl(ai, aj, ak, crds, eps)
+        return theta
+
+    @staticmethod
+    def _calc_angle_impl(ai, aj, ak, crds, eps=1e-6):
+        ri = crds[ai]
+        rj = crds[aj]
+        rk = crds[ak]
+
+        rij = ri - rj
+        rkj = rk - rj
+
+        # distances/norm
+        eij, Rij = unit_vec(rij, eps)
+        ekj, Rkj = unit_vec(rkj, eps)
+
+        # angle
+        costh = eij.dot(ekj)
+        costh = min(1.0, max(-1.0, costh))
+        theta = math.acos(costh)
+
+        return theta, costh, eij, Rij, ekj, Rkj
+
+    def calc(self, crds):
+        eps = 1e-6
+        theta, _, _, _, _, _ = self._calc_angle_impl(
+            self.aid0, self.aid1, self.aid2, crds, eps
+        )
+        delta = theta - self.th0
+        ene = self.w * delta * delta
+        return ene
+
+    def grad(self, crds, grad):
+        eps = 1e-6
+        theta, costh, eij, Rij, ekj, Rkj = self._calc_angle_impl(
+            self.aid0, self.aid1, self.aid2, crds, eps
+        )
+        delta = theta - self.th0
+
+        # calc gradient
+        df = 2.0 * self.w * delta
+
+        sinth = math.sqrt(max(0.0, 1.0 - costh * costh))
+        Dij = df / (max(eps, sinth) * Rij)
+        Dkj = df / (max(eps, sinth) * Rkj)
+
+        vec_dij = Dij * (costh * eij - ekj)
+        vec_dkj = Dkj * (costh * ekj - eij)
+
+        grad[self.aid0] += vec_dij
+        grad[self.aid1] -= vec_dij
+        grad[self.aid2] += vec_dkj
+        grad[self.aid1] -= vec_dkj
+
+
 class Restraints:
     _instance = None
 
@@ -355,25 +311,6 @@ class Restraints:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-
-    @staticmethod
-    def make_chiral(iatm, mol, conf):
-        aj = []
-        ajname = []
-        atom = mol.GetAtomWithIdx(iatm)
-        for b in atom.GetBonds():
-            j = b.GetOtherAtom(atom).GetIdx()
-            aj.append(j)
-            ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
-        chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
-        print(f"{chiral_vol=:.2f}")
-
-        atom_name = atom.GetProp("name")
-        chiral_tag = atom.GetChiralTag()
-        print(f"{iatm=} {atom_name=} {chiral_tag=} {aj} {ajname}")
-
-        ch = ChiralData(iatm, aj[0], aj[1], aj[2], chiral_vol)
-        return ch
 
     def make_bond(self, ai, aj, mol, conf, atoms):
         crds = conf.GetPositions()
@@ -384,6 +321,37 @@ class Restraints:
         self.register_site(atoms, ai, (bnd, 0))
         self.register_site(atoms, aj, (bnd, 1))
 
+    def make_angle(self, ai, aj, ak, mol, conf, atoms):
+        th0 = AngleData.calc_angle(ai, aj, ak, conf)
+        angl = AngleData(ai, aj, ak, th0)
+        self.angle_data.append(angl)
+        self.register_site(atoms, ai, (angl, 0))
+        self.register_site(atoms, aj, (angl, 1))
+        self.register_site(atoms, ak, (angl, 2))
+
+    def make_chiral(self, iatm, mol, conf, atoms):
+        # aj = []
+        # ajname = []
+        # atom = mol.GetAtomWithIdx(iatm)
+        # for b in atom.GetBonds():
+        #     j = b.GetOtherAtom(atom).GetIdx()
+        #     aj.append(j)
+        #     ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
+        # chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
+        # print(f"{chiral_vol=:.2f}")
+
+        # atom_name = atom.GetProp("name")
+        # chiral_tag = atom.GetChiralTag()
+        # print(f"{iatm=} {atom_name=} {chiral_tag=} {aj} {ajname}")
+        chiral_vol, aj0, aj1, aj2 = ChiralData.calc_chiral_vol(iatm, mol, conf)
+
+        ch = ChiralData(iatm, aj0, aj1, aj2, chiral_vol)
+        self.chiral_data.append(ch)
+        self.register_site(atoms, iatm, (ch, 0))
+        self.register_site(atoms, aj0, (ch, 1))
+        self.register_site(atoms, aj1, (ch, 2))
+        self.register_site(atoms, aj2, (ch, 3))
+
     def __init__(self):
         self.chiral_data = []
         self.bond_data = []
@@ -392,9 +360,15 @@ class Restraints:
         # self.method = "CG"
         self.method = "L-BFGS-B"
 
-    def add_chiral_data(self, ch):
-        self.chiral_data.append(ch)
-        return (ch, 0), (ch, 1), (ch, 2), (ch, 3)
+    def register_site2(self, get_func, set_func, i, value):
+        sid = get_func(i)
+        if sid == 0:
+            self.sites.append([value])
+            new_sid = len(self.sites)
+            # atoms[i].restraint = new_sid
+            set_func(i, new_sid)
+        else:
+            self.sites[sid - 1].append(value)
 
     def register_site(self, atoms, i, value):
         sid = atoms[i].restraint
@@ -410,12 +384,12 @@ class Restraints:
             return None
         return self.sites[index - 1]
 
-    def setup_chiral_data(self, ind, val):
-        if val == 0:
+    def setup_site(self, ind, sid):
+        if sid == 0:
             return
-        sites = self.get_sites(val)
-        for ch, aid in sites:
-            ch.setup(ind, aid)
+        sites = self.get_sites(sid)
+        for tgt, aid in sites:
+            tgt.setup(ind, aid)
 
     def minimize(self, crds_in):
         # print(f"{crds_in.shape=}")
