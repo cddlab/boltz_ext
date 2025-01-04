@@ -334,6 +334,9 @@ def parse_ccd_residue(
         # Add bond restraints
         restr.make_bond(idx_1, idx_2, ref_mol, conformer, atoms)
 
+    # Build angle restraints
+    restr.make_angle_restraints(ref_mol, conformer, atoms)
+
     unk_prot_id = const.unk_token_ids["PROTEIN"]
     return ParsedResidue(
         name=name,

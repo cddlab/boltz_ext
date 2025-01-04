@@ -463,7 +463,6 @@ class AtomDiffusion(Module):
             sid = int(feat_restr[i])
             if sid == 0:
                 continue
-            print(f"{i}: {sid=}")
             restr.setup_site(i, sid)
 
         num_sampling_steps = default(num_sampling_steps, self.num_sampling_steps)

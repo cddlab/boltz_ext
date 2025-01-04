@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from rdkit import Chem
 from scipy import optimize
 
 
@@ -12,8 +13,8 @@ def length(v, eps=1e-6):
     return math.sqrt(max(eps, v[0] * v[0] + v[1] * v[1] + v[2] * v[2]))
 
 
-def unit_vec(v):
-    vl = length(v)
+def unit_vec(v, eps=1e-6):
+    vl = length(v, eps=eps)
     return v / vl, vl
 
 
@@ -36,6 +37,7 @@ class ChiralData:
     aid3: int
     chiral: int
     w: float = 1.0
+    slack: float = 0.5
     fmax: float = 100.0
 
     def setup(self, ind, aid):
@@ -74,9 +76,9 @@ class ChiralData:
         vol = np.dot(v1, np.cross(v2, v3))
 
         if self.chiral > 0:
-            thr = self.chiral - 0.5
+            thr = self.chiral - self.slack
         else:
-            thr = self.chiral + 0.5
+            thr = self.chiral + self.slack
 
         delta = vol - thr
         ene = delta * delta * self.w
@@ -130,9 +132,9 @@ class ChiralData:
         n3, n3l = unit_vec(f3)
         nc, ncl = unit_vec(fc)
 
-        print(f"   force aver: {(n1l+n2l+n3l+ncl)/4}")
-
         if self.fmax > 0:
+            if n1l > self.fmax or n2l > self.fmax or n3l > self.fmax or ncl > self.fmax:
+                print(f"Force mean: {(n1l+n2l+n3l+ncl)/4}")
             n1l = min(n1l, self.fmax)
             n2l = min(n2l, self.fmax)
             n3l = min(n3l, self.fmax)
@@ -224,13 +226,21 @@ class BondData:
         grad[self.aid1] -= v1 * con
 
 
+_angl_patt = Chem.MolFromSmarts("*~*~*")
+
+
+def get_angle_idxs(mol, base_id=0):
+    ids = mol.GetSubstructMatches(_angl_patt)
+    return np.asarray(ids) + base_id
+
+
 @dataclass
 class AngleData:
     aid0: int
     aid1: int
     aid2: int
     th0: float
-    slack: float = 0.5
+    slack: float = math.radians(5.0)
     w: float = 0.1
     # fmax: float = 100.0
 
@@ -276,7 +286,17 @@ class AngleData:
         theta, _, _, _, _, _ = self._calc_angle_impl(
             self.aid0, self.aid1, self.aid2, crds, eps
         )
-        delta = theta - self.th0
+
+        th2 = self.th0 + self.slack
+        th1 = self.th0 - self.slack
+
+        if theta > th2:
+            delta = theta - th2
+        elif theta < th1:
+            delta = theta - th1
+        else:
+            return 0
+
         ene = self.w * delta * delta
         return ene
 
@@ -285,7 +305,16 @@ class AngleData:
         theta, costh, eij, Rij, ekj, Rkj = self._calc_angle_impl(
             self.aid0, self.aid1, self.aid2, crds, eps
         )
-        delta = theta - self.th0
+
+        th2 = self.th0 + self.slack
+        th1 = self.th0 - self.slack
+
+        if theta > th2:
+            delta = theta - th2
+        elif theta < th1:
+            delta = theta - th1
+        else:
+            return
 
         # calc gradient
         df = 2.0 * self.w * delta
@@ -318,43 +347,48 @@ class Restraints:
         d = np.linalg.norm(v)
         bnd = BondData(ai, aj, d)
         self.bond_data.append(bnd)
-        self.register_site(atoms, ai, (bnd, 0))
-        self.register_site(atoms, aj, (bnd, 1))
+        # self.register_site(atoms, ai, (bnd, 0))
+        # self.register_site(atoms, aj, (bnd, 1))
+
+        self.register_site(atoms[ai], lambda x: bnd.setup(x, 0))
+        self.register_site(atoms[aj], lambda x: bnd.setup(x, 1))
 
     def make_angle(self, ai, aj, ak, mol, conf, atoms):
         th0 = AngleData.calc_angle(ai, aj, ak, conf)
         angl = AngleData(ai, aj, ak, th0)
         self.angle_data.append(angl)
-        self.register_site(atoms, ai, (angl, 0))
-        self.register_site(atoms, aj, (angl, 1))
-        self.register_site(atoms, ak, (angl, 2))
+        # self.register_site(atoms[ai], (angl, 0))
+        # self.register_site(atoms[aj], (angl, 1))
+        # self.register_site(atoms[ak], (angl, 2))
+        self.register_site(atoms[ai], lambda x: angl.setup(x, 0))
+        self.register_site(atoms[aj], lambda x: angl.setup(x, 1))
+        self.register_site(atoms[ak], lambda x: angl.setup(x, 2))
+
+    def make_angle_restraints(self, mol, conf, atoms):
+        idxs = get_angle_idxs(mol)
+        for idx in idxs:
+            ai, aj, ak = idx
+            self.make_angle(ai, aj, ak, mol, conf, atoms)
 
     def make_chiral(self, iatm, mol, conf, atoms):
-        # aj = []
-        # ajname = []
-        # atom = mol.GetAtomWithIdx(iatm)
-        # for b in atom.GetBonds():
-        #     j = b.GetOtherAtom(atom).GetIdx()
-        #     aj.append(j)
-        #     ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
-        # chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
-        # print(f"{chiral_vol=:.2f}")
-
-        # atom_name = atom.GetProp("name")
-        # chiral_tag = atom.GetChiralTag()
-        # print(f"{iatm=} {atom_name=} {chiral_tag=} {aj} {ajname}")
         chiral_vol, aj0, aj1, aj2 = ChiralData.calc_chiral_vol(iatm, mol, conf)
 
         ch = ChiralData(iatm, aj0, aj1, aj2, chiral_vol)
         self.chiral_data.append(ch)
-        self.register_site(atoms, iatm, (ch, 0))
-        self.register_site(atoms, aj0, (ch, 1))
-        self.register_site(atoms, aj1, (ch, 2))
-        self.register_site(atoms, aj2, (ch, 3))
+        # self.register_site(atoms, iatm, (ch, 0))
+        # self.register_site(atoms, aj0, (ch, 1))
+        # self.register_site(atoms, aj1, (ch, 2))
+        # self.register_site(atoms, aj2, (ch, 3))
+
+        self.register_site(atoms[iatm], lambda x: ch.setup(x, 0))
+        self.register_site(atoms[aj0], lambda x: ch.setup(x, 1))
+        self.register_site(atoms[aj1], lambda x: ch.setup(x, 2))
+        self.register_site(atoms[aj2], lambda x: ch.setup(x, 3))
 
     def __init__(self):
         self.chiral_data = []
         self.bond_data = []
+        self.angle_data = []
         self.sites = []
         # self.method = "BFGS"
         # self.method = "CG"
@@ -370,12 +404,12 @@ class Restraints:
         else:
             self.sites[sid - 1].append(value)
 
-    def register_site(self, atoms, i, value):
-        sid = atoms[i].restraint
+    def register_site(self, atom, value):
+        sid = atom.restraint
         if sid == 0:
             self.sites.append([value])
             new_sid = len(self.sites)
-            atoms[i].restraint = new_sid
+            atom.restraint = new_sid
         else:
             self.sites[sid - 1].append(value)
 
@@ -388,21 +422,33 @@ class Restraints:
         if sid == 0:
             return
         sites = self.get_sites(sid)
-        for tgt, aid in sites:
-            tgt.setup(ind, aid)
+        # for tgt, aid in sites:
+        for tgt in sites:
+            tgt(ind)
+            # tgt.setup(ind, aid)
 
     def minimize(self, crds_in):
+        print("=== minimization ===")
         # print(f"{crds_in.shape=}")
         crds = crds_in.detach().cpu().numpy()
         crds = crds.reshape(-1)
-        opt = optimize.minimize(self.calc, crds, jac=self.grad, method=self.method)
+        opt = optimize.minimize(self.calc, crds, jac=self.grad, method=self.method, tol=1e-4)
         print(f"{opt=}")
 
         device = crds_in.device
         crds = opt.x.reshape(-1, 3)
+        crds_in[:, :] = torch.tensor(crds).to(device)
+
         for ch in self.chiral_data:
             ch.print(crds)
-        crds_in[:, :] = torch.tensor(crds).to(device)
+        b_ene = 0.0
+        for b in self.bond_data:
+            b_ene += b.calc(crds)
+        print(f"bond E={b_ene}")
+        a_ene = 0.0
+        for a in self.angle_data:
+            a_ene += a.calc(crds)
+        print(f"angle E={a_ene}")
 
     def calc(self, crds_in):
         ene = 0.0
@@ -412,7 +458,9 @@ class Restraints:
             ene += ch.calc(crds)
         for b in self.bond_data:
             ene += b.calc(crds)
-        print(f"calc: {ene=}")
+        for a in self.angle_data:
+            ene += a.calc(crds)
+        # print(f"calc: {ene=}")
         return ene
 
     def grad(self, crds_in):
@@ -424,5 +472,7 @@ class Restraints:
             ch.grad(crds, grad)
         for b in self.bond_data:
             b.grad(crds, grad)
+        for a in self.angle_data:
+            a.grad(crds, grad)
         grad = grad.reshape(-1)
         return grad
