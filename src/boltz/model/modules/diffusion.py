@@ -385,8 +385,6 @@ class AtomDiffusion(Module):
 
         self.register_buffer("zero", torch.tensor(0.0), persistent=False)
 
-        self.restr_step_range = (50, 999)
-
     @property
     def device(self):
         return next(self.score_model.parameters()).device
@@ -457,13 +455,8 @@ class AtomDiffusion(Module):
         **network_condition_kwargs,
     ):
         feats = network_condition_kwargs["feats"]
-        feat_restr = feats["ref_restraint"][0]
         restr = Restraints.get_instance()
-        for i in range(len(feat_restr)):
-            sid = int(feat_restr[i])
-            if sid == 0:
-                continue
-            restr.setup_site(i, sid)
+        restr.setup_site(feats["ref_restraint"])
 
         num_sampling_steps = default(num_sampling_steps, self.num_sampling_steps)
         atom_mask = atom_mask.repeat_interleave(multiplicity, 0)
@@ -516,8 +509,7 @@ class AtomDiffusion(Module):
                         **network_condition_kwargs,
                     ),
                 )
-            if i > self.restr_step_range[0] and i < self.restr_step_range[1]:
-                restr.minimize(atom_coords_denoised[0])
+            restr.minimize(atom_coords_denoised, i)
 
             if self.accumulate_token_repr:
                 if token_repr is None:

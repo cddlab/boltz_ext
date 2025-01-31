@@ -333,11 +333,11 @@ def parse_ccd_residue(
         bond_type = const.bond_type_ids.get(bond_type, unk_bond)
         bonds.append(ParsedBond(start, end, bond_type))
 
-        if ch_rest:
+        if ch_rest and len(chiral_aids) > 0:
             # Add bond restraints
             restr.make_bond(idx_1, idx_2, atoms, conf=conformer)
 
-    if ch_rest:
+    if ch_rest and len(chiral_aids) > 0:
         # Build angle restraints
         restr.make_angle_restraints(ref_mol, conformer, atoms)
 
@@ -579,6 +579,10 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
     # Disable rdkit warnings
     blocker = rdBase.BlockLogs()  # noqa: F841
 
+    # Restraints config
+    restr = Restraints.get_instance()
+    restr.set_config(schema.get("restraints_config", {}))
+
     # First group items that have the same type, sequence and modifications
     items_to_group = {}
     for item in schema["sequences"]:
@@ -761,6 +765,9 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
         msg = "No chains parsed!"
         raise ValueError(msg)
 
+    # Add inter-chain restraints
+    restr.link_bonds_by_conf(chains, schema.get("restraints", {}))
+
     # Create tables
     atom_data = []
     bond_data = []
@@ -891,6 +898,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             msg = f"Invalid constraint: {constraint}"
             raise ValueError(msg)
 
+    print(f"{connections=}")
     # Convert into datatypes
     atoms = np.array(atom_data, dtype=Atom)
     bonds = np.array(bond_data, dtype=Bond)
