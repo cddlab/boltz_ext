@@ -209,6 +209,7 @@ def parse_ccd_residue(
     name: str,
     ref_mol: Mol,
     res_idx: int,
+    ch_rest: bool = False,
 ) -> Optional[ParsedResidue]:
     """Parse an MMCIF ligand.
 
@@ -307,10 +308,11 @@ def parse_ccd_residue(
         idx_map[i] = atom_idx
         atom_idx += 1  # noqa: SIM113
 
-    # Load chirality restraints
     restr = Restraints.get_instance()
-    for i in chiral_aids:
-        restr.make_chiral(i, ref_mol, conformer, atoms)
+    if ch_rest:
+        # Load chirality restraints
+        for i in chiral_aids:
+            restr.make_chiral(i, ref_mol, conformer, atoms)
 
     # Load bonds
     bonds = []
@@ -331,11 +333,13 @@ def parse_ccd_residue(
         bond_type = const.bond_type_ids.get(bond_type, unk_bond)
         bonds.append(ParsedBond(start, end, bond_type))
 
-        # Add bond restraints
-        restr.make_bond(idx_1, idx_2, ref_mol, conformer, atoms)
+        if ch_rest:
+            # Add bond restraints
+            restr.make_bond(idx_1, idx_2, atoms, conf=conformer)
 
-    # Build angle restraints
-    restr.make_angle_restraints(ref_mol, conformer, atoms)
+    if ch_rest:
+        # Build angle restraints
+        restr.make_angle_restraints(ref_mol, conformer, atoms)
 
     unk_prot_id = const.unk_token_ids["PROTEIN"]
     return ParsedResidue(
@@ -386,6 +390,8 @@ def parse_polymer(
         If the alignment fails.
 
     """
+    # print(f"{entity=}")
+    # print(f"{sequence=}")
     ref_res = set(const.tokens)
     unk_chirality = const.chirality_type_ids[const.unk_chirality_type]
 
@@ -418,6 +424,7 @@ def parse_polymer(
 
         # Iterate, always in the same order
         atoms: list[ParsedAtom] = []
+        # chiral_aids = []
 
         for ref_atom in ref_atoms:
             # Get atom name
@@ -446,6 +453,9 @@ def parse_polymer(
                     ),
                 )
             )
+            # if ref_atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED:
+            #     if atom_name == "CA":
+            #         chiral_aids.append(idx)
 
         atom_center = const.res_to_center_atom_id[res_corrected]
         atom_disto = const.res_to_disto_atom_id[res_corrected]
@@ -463,6 +473,43 @@ def parse_polymer(
                 orig_idx=None,
             )
         )
+
+        # # Load chirality restraints
+        # if entity == 1:
+        #     atom_names = const.ref_atoms[res_corrected]
+        #     print(f"{atom_names=}")
+        #     restr = Restraints.get_instance()
+        #     print(f"{chiral_aids=}")
+        #     for i in chiral_aids:
+        #         restr.make_chiral(i, ref_mol, ref_conformer, atoms, invert=True)
+
+        #     for bond in ref_mol.GetBonds():
+        #         idx_1 = bond.GetBeginAtomIdx()
+        #         idx_2 = bond.GetEndAtomIdx()
+        #         a1 = ref_mol.GetAtomWithIdx(idx_1).GetProp("name")
+        #         a2 = ref_mol.GetAtomWithIdx(idx_2).GetProp("name")
+        #         print(f"{a1=} {a2=}")
+        #         if a1 not in atom_names or a2 not in atom_names:
+        #             continue
+        #         ai1 = atom_names.index(a1)
+        #         ai2 = atom_names.index(a2)
+        #         print(f"{ai1=} {ai2=}")
+        #         # Add bond restraints
+        #         restr.make_bond(ai1, ai2, atoms, conf=ref_conformer)
+
+    # restr = Restraints.get_instance()
+    # def find_atom(res: ParsedResidue, name: str) -> Optional[ParsedAtom]:
+    #     for atom in res.atoms:
+    #         if atom.name == name:
+    #             return atom
+    #     return None
+    # for res1, res2 in zip(parsed[:-1], parsed[1:]):
+    #     a1 = find_atom(res1, "C")
+    #     a2 = find_atom(res2, "N")
+    #     if a1 is not None and a2 is not None:
+    #         ai1 = res1.atoms.index(a1)
+    #         ai2 = res2.atoms.index(a2)
+    #         restr.make_link_bond(ai1, res1.atoms, ai2, res2.atoms, ideal=1.29)
 
     # Return polymer object
     return ParsedChain(
@@ -664,6 +711,10 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             seq = items[0][entity_type]["smiles"]
             mol = AllChem.MolFromSmiles(seq)
             mol = AllChem.AddHs(mol)
+            ch_rest = False
+            if "chiral_restraints" in items[0][entity_type]:
+                ch_rest = items[0][entity_type]["chiral_restraints"] 
+            print(f"*** {ch_rest=}")
 
             # Set atom names
             canonical_order = AllChem.CanonicalRankAtoms(mol)
@@ -680,6 +731,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 name="LIG",
                 ref_mol=mol_no_h,
                 res_idx=0,
+                ch_rest=ch_rest,
             )
             parsed_chain = ParsedChain(
                 entity=entity_id,

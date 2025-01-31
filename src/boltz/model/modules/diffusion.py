@@ -385,7 +385,7 @@ class AtomDiffusion(Module):
 
         self.register_buffer("zero", torch.tensor(0.0), persistent=False)
 
-        self.restr_step_after = 150
+        self.restr_step_range = (50, 999)
 
     @property
     def device(self):
@@ -516,7 +516,7 @@ class AtomDiffusion(Module):
                         **network_condition_kwargs,
                     ),
                 )
-            if i > self.restr_step_after:
+            if i > self.restr_step_range[0] and i < self.restr_step_range[1]:
                 restr.minimize(atom_coords_denoised[0])
 
             if self.accumulate_token_repr:

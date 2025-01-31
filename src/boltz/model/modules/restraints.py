@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -9,50 +10,57 @@ from rdkit import Chem
 from scipy import optimize
 
 
-def length(v, eps=1e-6):
+def length(v: np.ndarray, eps: float = 1e-6) -> float:
+    """Calculate the length of a vector."""
     return math.sqrt(max(eps, v[0] * v[0] + v[1] * v[1] + v[2] * v[2]))
 
 
-def unit_vec(v, eps=1e-6):
+def unit_vec(v: np.ndarray, eps: float = 1e-6) -> tuple[np.ndarray, float]:
+    """Calculate the unit vector."""
     vl = length(v, eps=eps)
     return v / vl, vl
 
 
-def calc_chiral_vol(crds, iatm, aj):
-    # crds = conf.GetPositions()
+def calc_chiral_vol(crds: np.ndarray, iatm: int, aj: int) -> float:
+    """Calculate the chiral volume."""
     vc = crds[iatm]
     v1 = crds[aj[0]] - vc
     v2 = crds[aj[1]] - vc
     v3 = crds[aj[2]] - vc
-    # print(v1, v2, v3)
+
     vol = np.dot(v1, np.cross(v2, v3))
     return vol
 
 
 @dataclass
 class ChiralData:
+    """Class for chiral data."""
+
     aid0: int
     aid1: int
     aid2: int
     aid3: int
     chiral: int
-    w: float = 1.0
-    slack: float = 0.5
-    fmax: float = 100.0
+    w: float = 0.1
+    slack: float = 0.05
+    fmax: float = -100.0
 
-    def setup(self, ind, aid):
+    def setup(self, ind: int, aid: int) -> None:
+        """Set up the chiral data."""
         if aid == 0:
             self.aid0 = ind
         elif aid == 1:
             self.aid1 = ind
-        elif aid == 2:
+        elif aid == 2:  # noqa: PLR2004
             self.aid2 = ind
-        elif aid == 3:
+        elif aid == 3:  # noqa: PLR2004
             self.aid3 = ind
         else:
-            raise ValueError(f"Invalid data {ind=} {aid=}")
+            msg = f"Invalid data {ind=} {aid=}"
+            raise ValueError(msg)
 
-    def print(self, crds):
+    def print(self, crds: np.ndarray) -> None:
+        """Print the chiral data."""
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         a2 = crds[self.aid2]
@@ -61,11 +69,13 @@ class ChiralData:
         v2 = a2 - a0
         v3 = a3 - a0
         vol = np.dot(v1, np.cross(v2, v3))
-        print(
-            f"{self.aid0}-{self.aid1}-{self.aid2}-{self.aid3}: {vol=:.2f} {self.chiral=:.2f}"
+        print(  # noqa: T201
+            f"{self.aid0}-{self.aid1}-{self.aid2}-{self.aid3}:"
+            f" {vol=:.2f} {self.chiral=:.2f}"
         )
 
-    def calc(self, crds):
+    def calc(self, crds: np.ndarray) -> float:
+        """Calculate the chiral data."""
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         a2 = crds[self.aid2]
@@ -75,7 +85,7 @@ class ChiralData:
         v3 = a3 - a0
         vol = np.dot(v1, np.cross(v2, v3))
 
-        if self.chiral > 0:
+        if self.chiral > 0:  # noqa: SIM108
             thr = self.chiral - self.slack
         else:
             thr = self.chiral + self.slack
@@ -86,15 +96,15 @@ class ChiralData:
         if self.chiral > 0:
             if delta < 0:
                 return ene
-            else:
+            else:  # noqa: RET505
                 return 0
-        else:
+        else:  # noqa: PLR5501
             if delta > 0:
                 return ene
-            else:
+            else:  # noqa: RET505
                 return 0
 
-    def grad(self, crds, grad):
+    def grad(self, crds: np.ndarray, grad: np.ndarray) -> bool:
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         a2 = crds[self.aid2]
@@ -134,7 +144,7 @@ class ChiralData:
 
         if self.fmax > 0:
             if n1l > self.fmax or n2l > self.fmax or n3l > self.fmax or ncl > self.fmax:
-                print(f"Force mean: {(n1l+n2l+n3l+ncl)/4}")
+                print(f"Force mean: {(n1l + n2l + n3l + ncl) / 4}")
             n1l = min(n1l, self.fmax)
             n2l = min(n2l, self.fmax)
             n3l = min(n3l, self.fmax)
@@ -175,8 +185,8 @@ class BondData:
     aid0: int
     aid1: int
     r0: float
-    slack: float = 0.5
-    w: float = 0.1
+    slack: float = 0
+    w: float = 0.05
     fmax: float = 100.0
 
     def setup(self, ind, aid):
@@ -185,9 +195,10 @@ class BondData:
         elif aid == 1:
             self.aid1 = ind
         else:
-            raise ValueError(f"Invalid data {ind=} {aid=}")
+            msg = f"Invalid data {ind=} {aid=}"
+            raise ValueError(msg)
 
-    def calc(self, crds):
+    def calc(self, crds: Any) -> float:
         a0 = crds[self.aid0]
         a1 = crds[self.aid1]
         v1 = a0 - a1
@@ -241,7 +252,7 @@ class AngleData:
     aid2: int
     th0: float
     slack: float = math.radians(5.0)
-    w: float = 0.1
+    w: float = 0.05
     # fmax: float = 100.0
 
     def setup(self, ind, aid):
@@ -341,17 +352,22 @@ class Restraints:
             cls._instance = cls()
         return cls._instance
 
-    def make_bond(self, ai, aj, mol, conf, atoms):
+    def make_bond(self, ai, aj, atoms, conf):
         crds = conf.GetPositions()
         v = crds[aj] - crds[ai]
         d = np.linalg.norm(v)
         bnd = BondData(ai, aj, d)
         self.bond_data.append(bnd)
-        # self.register_site(atoms, ai, (bnd, 0))
-        # self.register_site(atoms, aj, (bnd, 1))
 
         self.register_site(atoms[ai], lambda x: bnd.setup(x, 0))
         self.register_site(atoms[aj], lambda x: bnd.setup(x, 1))
+
+    def make_link_bond(self, ai1, atoms1, ai2, atoms2, ideal):
+        bnd = BondData(ai1, ai2, ideal)
+        self.bond_data.append(bnd)
+
+        self.register_site(atoms1[ai1], lambda x: bnd.setup(x, 0))
+        self.register_site(atoms2[ai2], lambda x: bnd.setup(x, 1))
 
     def make_angle(self, ai, aj, ak, mol, conf, atoms):
         th0 = AngleData.calc_angle(ai, aj, ak, conf)
@@ -370,8 +386,10 @@ class Restraints:
             ai, aj, ak = idx
             self.make_angle(ai, aj, ak, mol, conf, atoms)
 
-    def make_chiral(self, iatm, mol, conf, atoms):
+    def make_chiral(self, iatm, mol, conf, atoms, invert=False):
         chiral_vol, aj0, aj1, aj2 = ChiralData.calc_chiral_vol(iatm, mol, conf)
+        if invert:
+            chiral_vol = -chiral_vol
 
         ch = ChiralData(iatm, aj0, aj1, aj2, chiral_vol)
         self.chiral_data.append(ch)
@@ -391,8 +409,8 @@ class Restraints:
         self.angle_data = []
         self.sites = []
         # self.method = "BFGS"
-        # self.method = "CG"
-        self.method = "L-BFGS-B"
+        self.method = "CG"
+        # self.method = "L-BFGS-B"
 
     def register_site2(self, get_func, set_func, i, value):
         sid = get_func(i)
@@ -427,20 +445,28 @@ class Restraints:
             tgt(ind)
             # tgt.setup(ind, aid)
 
-    def minimize(self, crds_in):
-        print("=== minimization ===")
+    def minimize(self, crds_in: torch.Tensor) -> None:
+        """Minimize the restraints."""
+        if len(self.chiral_data) == 0:
+            return
+        print("=== minimization ===")  # noqa: T201
         # print(f"{crds_in.shape=}")
         crds = crds_in.detach().cpu().numpy()
         crds = crds.reshape(-1)
-        opt = optimize.minimize(self.calc, crds, jac=self.grad, method=self.method, tol=1e-4)
+        opt = optimize.minimize(
+            self.calc, crds, jac=self.grad, method=self.method
+        )  # , tol=1e-4)
         print(f"{opt=}")
 
         device = crds_in.device
         crds = opt.x.reshape(-1, 3)
         crds_in[:, :] = torch.tensor(crds).to(device)
 
+        ch_ene = 0.0
         for ch in self.chiral_data:
             ch.print(crds)
+            ch_ene += ch.calc(crds)
+        print(f"chiral E={ch_ene}")
         b_ene = 0.0
         for b in self.bond_data:
             b_ene += b.calc(crds)
