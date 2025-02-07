@@ -718,7 +718,8 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             ch_rest = False
             if "chiral_restraints" in items[0][entity_type]:
                 ch_rest = items[0][entity_type]["chiral_restraints"] 
-            print(f"*** {ch_rest=}")
+            if ch_rest:
+                print(f"apply {ch_rest=} for mol: {Chem.MolToSmiles(Chem.RemoveHs(mol))}")
 
             # Set atom names
             canonical_order = AllChem.CanonicalRankAtoms(mol)
