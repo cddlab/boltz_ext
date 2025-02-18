@@ -79,7 +79,11 @@ class ChiralData:
 
     def is_valid(self) -> bool:
         """Check if the chiral data is valid."""
-        return self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0 and self.aid3 >= 0
+        if self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0 and self.aid3 >= 0:
+            return True
+        if self.w > 0.0:
+            return True
+        return False
 
     def reset_indices(self) -> None:
         """Reset the indices."""
@@ -222,7 +226,11 @@ class BondData:
 
     def is_valid(self) -> bool:
         """Check if the bond data is valid."""
-        return self.aid0 >= 0 and self.aid1 >= 0
+        if self.aid0 >= 0 and self.aid1 >= 0:
+            return True
+        if self.w > 0.0:
+            return True
+        return False
 
     def reset_indices(self) -> None:
         """Reset the indices."""
@@ -303,7 +311,11 @@ class AngleData:
 
     def is_valid(self) -> bool:
         """Check if the angle data is valid."""
-        return self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0
+        if self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0:
+            return True
+        if self.w > 0.0:
+            return True
+        return False
 
     def reset_indices(self) -> None:
         """Reset the indices."""
@@ -428,8 +440,9 @@ class Restraints:
         self.config = config
 
         self.verbose = config.get("verbose", False)
-        self.start_step = config.get("start_step", 50)
-        self.end_step = config.get("end_step", 999)
+        # self.start_step = config.get("start_step", 50)
+        # self.end_step = config.get("end_step", 999)
+        self.start_sigma = config.get("start_sigma", 1.0)
 
         self.chiral_config = config.get("chiral", {})
         self.bond_config = config.get("bond", {})
@@ -600,10 +613,12 @@ class Restraints:
             if ch.is_valid():
                 print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
 
-    def minimize(self, batch_crds_in: torch.Tensor, istep: int) -> None:
+    def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
-        if not (self.start_step <= istep < self.end_step):
+        if sigma_t > self.start_sigma:
             return
+        # if not (self.start_step <= istep < self.end_step):
+        #     return
 
         if len(self.chiral_data) == 0:
             return
@@ -611,7 +626,7 @@ class Restraints:
         device = batch_crds_in.device
         crds_in = batch_crds_in
         method = self.config.get("method", "CG")
-        maxiter = int(self.config.get("maxiter", "100"))
+        max_iter = int(self.config.get("max_iter", "100"))
 
         if self.verbose:
             print(f"=== minimization {istep} ===")  # noqa: T201
@@ -625,7 +640,7 @@ class Restraints:
         crds = crds.reshape(-1)
 
         opt = optimize.minimize(
-            self.calc, crds, jac=self.grad, method=method, options={"maxiter": maxiter}
+            self.calc, crds, jac=self.grad, method=method, options={"maxiter": max_iter}
         )
         # print(f"{opt=}")
 

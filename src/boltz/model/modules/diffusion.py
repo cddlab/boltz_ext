@@ -509,7 +509,7 @@ class AtomDiffusion(Module):
                         **network_condition_kwargs,
                     ),
                 )
-            restr.minimize(atom_coords_denoised, i)
+            restr.minimize(atom_coords_denoised, i, sigma_t)
 
             if self.accumulate_token_repr:
                 if token_repr is None:
