@@ -550,14 +550,25 @@ class Restraints:
         self.register_site(atoms[aj], lambda x: angl.setup(x, 1))
         self.register_site(atoms[ak], lambda x: angl.setup(x, 2))
 
-    def make_angle_restraints(self, mol, conf, atoms) -> None:
+    def make_angle_restraints(self, mol, conf, atoms, atom_names=None) -> None:
         idxs = get_angle_idxs(mol)
+        print(f"{idxs=}")
         for idx in idxs:
             ai, aj, ak = idx
+            if atom_names is not None:
+                an1 = mol.GetAtomWithIdx(int(ai)).GetProp("name")
+                an2 = mol.GetAtomWithIdx(int(aj)).GetProp("name")
+                an3 = mol.GetAtomWithIdx(int(ak)).GetProp("name")
+                if an1 not in atom_names or an2 not in atom_names or an3 not in atom_names:
+                    print(f"skip {an1=} {an2=} {an3=}")
+                    continue
+
             self.make_angle(ai, aj, ak, mol, conf, atoms)
 
-    def make_chiral_impl(self, ai: int, aj: list[int], mol, conf, atoms):
+    def make_chiral_impl(self, ai: int, aj: list[int], mol, conf, atoms, invert: bool = False) -> None:
         chiral_vol = calc_chiral_vol(conf.GetPositions(), ai, aj)
+        if invert:
+            chiral_vol = -chiral_vol
         ch = self._create_chiral_data(chiral_vol)
         self.chiral_data.append(ch)
 
@@ -570,7 +581,7 @@ class Restraints:
     def make_chiral(self, iatm: int, mol, conf, atoms, invert: bool = False) -> None:
         nei_ind = ChiralData.get_nei_atoms(iatm, mol)
         for cand in itertools.combinations(nei_ind, 3):
-            self.make_chiral_impl(iatm, cand, mol, conf, atoms)
+            self.make_chiral_impl(iatm, cand, mol, conf, atoms, invert=invert)
 
     def register_site(self, atom, value):
         sid = atom.restraint

@@ -361,6 +361,7 @@ def parse_polymer(
     entity: str,
     chain_type: str,
     components: dict[str, Mol],
+    invert_chirality: bool = False,
 ) -> Optional[ParsedChain]:
     """Process a sequence into a chain object.
 
@@ -424,7 +425,7 @@ def parse_polymer(
 
         # Iterate, always in the same order
         atoms: list[ParsedAtom] = []
-        # chiral_aids = []
+        chiral_aids = []
 
         for ref_atom in ref_atoms:
             # Get atom name
@@ -453,9 +454,9 @@ def parse_polymer(
                     ),
                 )
             )
-            # if ref_atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED:
-            #     if atom_name == "CA":
-            #         chiral_aids.append(idx)
+            if ref_atom.GetChiralTag() != Chem.ChiralType.CHI_UNSPECIFIED:
+                if atom_name == "CA":
+                    chiral_aids.append(idx)
 
         atom_center = const.res_to_center_atom_id[res_corrected]
         atom_disto = const.res_to_disto_atom_id[res_corrected]
@@ -474,42 +475,48 @@ def parse_polymer(
             )
         )
 
-        # # Load chirality restraints
-        # if entity == 1:
-        #     atom_names = const.ref_atoms[res_corrected]
-        #     print(f"{atom_names=}")
-        #     restr = Restraints.get_instance()
-        #     print(f"{chiral_aids=}")
-        #     for i in chiral_aids:
-        #         restr.make_chiral(i, ref_mol, ref_conformer, atoms, invert=True)
+        # Load chirality restraints
+        if invert_chirality and len(chiral_aids) > 0:
+            atom_names = const.ref_atoms[res_corrected]
+            print(f"{atom_names=}")
+            restr = Restraints.get_instance()
+            print(f"{chiral_aids=}")
+            for i in chiral_aids:
+                restr.make_chiral(i, ref_mol, ref_conformer, atoms, invert=True)
 
-        #     for bond in ref_mol.GetBonds():
-        #         idx_1 = bond.GetBeginAtomIdx()
-        #         idx_2 = bond.GetEndAtomIdx()
-        #         a1 = ref_mol.GetAtomWithIdx(idx_1).GetProp("name")
-        #         a2 = ref_mol.GetAtomWithIdx(idx_2).GetProp("name")
-        #         print(f"{a1=} {a2=}")
-        #         if a1 not in atom_names or a2 not in atom_names:
-        #             continue
-        #         ai1 = atom_names.index(a1)
-        #         ai2 = atom_names.index(a2)
-        #         print(f"{ai1=} {ai2=}")
-        #         # Add bond restraints
-        #         restr.make_bond(ai1, ai2, atoms, conf=ref_conformer)
+            for bond in ref_mol.GetBonds():
+                idx_1 = bond.GetBeginAtomIdx()
+                idx_2 = bond.GetEndAtomIdx()
+                a1 = ref_mol.GetAtomWithIdx(idx_1).GetProp("name")
+                a2 = ref_mol.GetAtomWithIdx(idx_2).GetProp("name")
+                print(f"Bond {a1=} {a2=}")
+                if a1 not in atom_names or a2 not in atom_names:
+                    print(f"skip {a1=} {a2=}")
+                    continue
+                ai1 = atom_names.index(a1)
+                ai2 = atom_names.index(a2)
+                print(f"  {ai1=} {ai2=}")
+                # Add bond restraints
+                restr.make_bond(ai1, ai2, atoms, conf=ref_conformer)
 
-    # restr = Restraints.get_instance()
-    # def find_atom(res: ParsedResidue, name: str) -> Optional[ParsedAtom]:
-    #     for atom in res.atoms:
-    #         if atom.name == name:
-    #             return atom
-    #     return None
-    # for res1, res2 in zip(parsed[:-1], parsed[1:]):
-    #     a1 = find_atom(res1, "C")
-    #     a2 = find_atom(res2, "N")
-    #     if a1 is not None and a2 is not None:
-    #         ai1 = res1.atoms.index(a1)
-    #         ai2 = res2.atoms.index(a2)
-    #         restr.make_link_bond(ai1, res1.atoms, ai2, res2.atoms, ideal=1.29)
+            if len(chiral_aids) > 0:
+                # Build angle restraints
+                restr.make_angle_restraints(ref_mol, ref_conformer, atoms, atom_names=atom_names)
+
+    if invert_chirality:
+        restr = Restraints.get_instance()
+        def find_atom(res: ParsedResidue, name: str) -> Optional[ParsedAtom]:
+            for atom in res.atoms:
+                if atom.name == name:
+                    return atom
+            return None
+        for res1, res2 in zip(parsed[:-1], parsed[1:]):
+            a1 = find_atom(res1, "C")
+            a2 = find_atom(res2, "N")
+            if a1 is not None and a2 is not None:
+                ai1 = res1.atoms.index(a1)
+                ai2 = res2.atoms.index(a2)
+                restr.make_link_bond(ai1, res1.atoms, ai2, res2.atoms, ideal=1.29)
 
     # Return polymer object
     return ParsedChain(
@@ -683,6 +690,7 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
                 entity=entity_id,
                 chain_type=chain_type,
                 components=ccd,
+                invert_chirality=items[0][entity_type].get("invert_chirality", False),
             )
 
         # Parse a non-polymer
