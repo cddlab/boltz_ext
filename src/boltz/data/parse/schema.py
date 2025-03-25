@@ -391,8 +391,6 @@ def parse_polymer(
         If the alignment fails.
 
     """
-    # print(f"{entity=}")
-    # print(f"{sequence=}")
     ref_res = set(const.tokens)
     unk_chirality = const.chirality_type_ids[const.unk_chirality_type]
 
@@ -907,7 +905,6 @@ def parse_boltz_schema(  # noqa: C901, PLR0915, PLR0912
             msg = f"Invalid constraint: {constraint}"
             raise ValueError(msg)
 
-    print(f"{connections=}")
     # Convert into datatypes
     atoms = np.array(atom_data, dtype=Atom)
     bonds = np.array(bond_data, dtype=Bond)

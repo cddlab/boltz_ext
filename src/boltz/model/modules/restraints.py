@@ -1,445 +1,14 @@
 from __future__ import annotations
 
-import math
 import itertools
-from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import torch
 from rdkit import Chem
 from scipy import optimize
-
-
-def length(v: np.ndarray, eps: float = 1e-6) -> float:
-    """Calculate the length of a vector."""
-    return math.sqrt(max(eps, v[0] * v[0] + v[1] * v[1] + v[2] * v[2]))
-
-
-def unit_vec(v: np.ndarray, eps: float = 1e-6) -> tuple[np.ndarray, float]:
-    """Calculate the unit vector."""
-    vl = length(v, eps=eps)
-    return v / vl, vl
-
-
-def calc_chiral_vol(crds: np.ndarray, iatm: int, aj: int) -> float:
-    """Calculate the chiral volume."""
-    vc = crds[iatm]
-    v1 = crds[aj[0]] - vc
-    v2 = crds[aj[1]] - vc
-    v3 = crds[aj[2]] - vc
-
-    vol = np.dot(v1, np.cross(v2, v3))
-    return vol
-
-
-@dataclass
-class ChiralData:
-    """Class for chiral data."""
-
-    aid0: int
-    aid1: int
-    aid2: int
-    aid3: int
-    chiral_vol: float
-    w: float = 0.1
-    slack: float = 0.05
-    fmax: float = -100.0
-
-    verbose: bool = False
-
-    def setup(self, ind: int, aid: int) -> None:
-        """Set up the chiral data."""
-        if aid == 0:
-            self.aid0 = ind
-        elif aid == 1:
-            self.aid1 = ind
-        elif aid == 2:  # noqa: PLR2004
-            self.aid2 = ind
-        elif aid == 3:  # noqa: PLR2004
-            self.aid3 = ind
-        else:
-            msg = f"Invalid data {ind=} {aid=}"
-            raise ValueError(msg)
-
-    def print(self, crds: np.ndarray) -> None:
-        """Print the chiral data."""
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        a2 = crds[self.aid2]
-        a3 = crds[self.aid3]
-        v1 = a1 - a0
-        v2 = a2 - a0
-        v3 = a3 - a0
-        vol = np.dot(v1, np.cross(v2, v3))
-        print(  # noqa: T201
-            f"C {self.aid0}-{self.aid1}-{self.aid2}-{self.aid3}:"
-            f" cur {vol:.2f} ref {self.chiral_vol:.2f} dif {vol - self.chiral_vol:.2f}"
-        )
-
-    def is_valid(self) -> bool:
-        """Check if the chiral data is valid."""
-        if self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0 and self.aid3 >= 0:
-            return True
-        if self.w > 0.0:
-            return True
-        return False
-
-    def reset_indices(self) -> None:
-        """Reset the indices."""
-        self.aid0 = -1
-        self.aid1 = -1
-        self.aid2 = -1
-        self.aid3 = -1
-
-    def calc(self, crds: np.ndarray) -> float:
-        """Calculate the chiral data."""
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        a2 = crds[self.aid2]
-        a3 = crds[self.aid3]
-        v1 = a1 - a0
-        v2 = a2 - a0
-        v3 = a3 - a0
-        vol = np.dot(v1, np.cross(v2, v3))
-        if self.chiral_vol > 0:
-            thr = self.chiral_vol - self.slack
-        else:
-            thr = self.chiral_vol + self.slack
-
-        delta = vol - thr
-
-        ene = delta * delta * self.w
-
-        return ene
-        # if self.chiral_vol > 0:
-        #     if delta < 0:
-        #         return ene
-        #     else:  # noqa: RET505
-        #         return 0
-        # else:  # noqa: PLR5501
-        #     if delta > 0:
-        #         return ene
-        #     else:  # noqa: RET505
-        #         return 0
-
-    def grad(self, crds: np.ndarray, grad: np.ndarray) -> bool:
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        a2 = crds[self.aid2]
-        a3 = crds[self.aid3]
-        v1 = a1 - a0
-        v2 = a2 - a0
-        v3 = a3 - a0
-        vol = np.dot(v1, np.cross(v2, v3))
-
-        if self.chiral_vol > 0:
-            thr = self.chiral_vol - self.slack
-        else:
-            thr = self.chiral_vol + self.slack
-
-        delta = vol - thr
-        dE = 2.0 * delta * self.w
-        # print(f"   {dE=}")
-
-        # eps = 1e-2
-        # if thr < 0:
-        #     dE = max(0, dE)
-        #     if dE < eps:
-        #         return False
-        # else:
-        #     dE = min(0, dE)
-        #     if dE > -eps:
-        #         return False
-
-        f1 = np.cross(v2, v3) * dE
-        f2 = np.cross(v3, v1) * dE
-        f3 = np.cross(v1, v2) * dE
-        fc = -f1 - f2 - f3
-
-        n1, n1l = unit_vec(f1)
-        n2, n2l = unit_vec(f2)
-        n3, n3l = unit_vec(f3)
-        nc, ncl = unit_vec(fc)
-
-        if self.fmax > 0:
-            if n1l > self.fmax or n2l > self.fmax or n3l > self.fmax or ncl > self.fmax:
-                print(f"Force mean: {(n1l + n2l + n3l + ncl) / 4}")
-            n1l = min(n1l, self.fmax)
-            n2l = min(n2l, self.fmax)
-            n3l = min(n3l, self.fmax)
-            ncl = min(ncl, self.fmax)
-
-            f1 = n1 * n1l
-            f2 = n2 * n2l
-            f3 = n3 * n3l
-            fc = nc * ncl
-
-        grad[self.aid0] += fc
-        grad[self.aid1] += f1
-        grad[self.aid2] += f2
-        grad[self.aid3] += f3
-        return True
-
-    @staticmethod
-    def get_nei_atoms(iatm: int, mol: Chem.Mol) -> list[int]:
-        """Get the neighboring atoms."""
-        atom = mol.GetAtomWithIdx(iatm)
-        aj = []
-        for b in atom.GetBonds():
-            j = b.GetOtherAtom(atom).GetIdx()
-            aj.append(j)
-        return aj
-
-    @staticmethod
-    def calc_chiral_atoms(iatm, mol, conf):
-        aj = []
-        ajname = []
-        atom = mol.GetAtomWithIdx(iatm)
-        for b in atom.GetBonds():
-            j = b.GetOtherAtom(atom).GetIdx()
-            aj.append(j)
-            ajname.append(mol.GetAtomWithIdx(j).GetProp("name"))
-
-        if len(aj) > 4:
-            raise ValueError(f"Invalid chiral atom neighbors {iatm=} {aj=}")
-
-        chiral_vol = calc_chiral_vol(conf.GetPositions(), iatm, aj)
-        print(f"{chiral_vol=:.2f}")
-
-        atom_name = atom.GetProp("name")
-        chiral_tag = atom.GetChiralTag()
-        print(f"{iatm=} {atom_name=} {aj} {ajname} {chiral_tag=}")
-        return chiral_vol, aj[0], aj[1], aj[2]
-
-
-@dataclass
-class BondData:
-    """Class for bond data."""
-
-    aid0: int
-    aid1: int
-    r0: float
-    slack: float = 0
-    w: float = 0.05
-    # fmax: float = 100.0
-
-    def is_valid(self) -> bool:
-        """Check if the bond data is valid."""
-        if self.aid0 >= 0 and self.aid1 >= 0:
-            return True
-        if self.w > 0.0:
-            return True
-        return False
-
-    def reset_indices(self) -> None:
-        """Reset the indices."""
-        self.aid0 = -1
-        self.aid1 = -1
-
-    def setup(self, ind: int, aid: int) -> None:
-        """Set up bond data."""
-        if aid == 0:
-            self.aid0 = ind
-        elif aid == 1:
-            self.aid1 = ind
-        else:
-            msg = f"Invalid data {ind=} {aid=}"
-            raise ValueError(msg)
-
-    def calc(self, crds: np.ndarray) -> float:
-        """Calculate the bond data."""
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        v1 = a0 - a1
-        n1l = length(v1)
-
-        r2 = self.r0 + self.slack
-        r1 = self.r0 - self.slack
-        if n1l > r2:
-            delta = n1l - r2
-        elif n1l < r1:
-            delta = n1l - r1
-        else:
-            return 0
-        ene = self.w * delta * delta
-        return ene
-
-    def grad(self, crds: np.ndarray, grad: np.ndarray) -> None:
-        """Calculate the gradient."""
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        v1 = a0 - a1
-        n1l = length(v1)
-
-        r2 = self.r0 + self.slack
-        r1 = self.r0 - self.slack
-        if n1l > r2:
-            # delta = n1l - r2
-            delta = r2 / n1l
-        elif n1l < r1:
-            # delta = n1l - r1
-            delta = r1 / n1l
-        else:
-            return
-
-        con = 2.0 * self.w * (1.0 - delta)
-        grad[self.aid0] += v1 * con
-        grad[self.aid1] -= v1 * con
-
-    def print(self, crds: np.ndarray) -> None:
-        """Print the bond data."""
-        a0 = crds[self.aid0]
-        a1 = crds[self.aid1]
-        v1 = a0 - a1
-        n1l = length(v1)
-
-        print(  # noqa: T201
-            f"B {self.aid0}-{self.aid1}:"
-            f" cur {n1l:.2f} ref {self.r0:.2f} dif {n1l - self.r0:.2f}"
-        )
-
-
-_angl_patt = Chem.MolFromSmarts("*~*~*")
-
-
-def get_angle_idxs(mol: Chem.Mol, base_id: int = 0) -> np.ndarray:
-    """Get the angle indexes."""
-    ids = mol.GetSubstructMatches(_angl_patt)
-    return np.asarray(ids) + base_id
-
-
-@dataclass
-class AngleData:
-    """Class for angle data."""
-
-    aid0: int
-    aid1: int
-    aid2: int
-    th0: float
-    slack: float = math.radians(5.0)
-    w: float = 0.05
-    # fmax: float = 100.0
-
-    def is_valid(self) -> bool:
-        """Check if the angle data is valid."""
-        if self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0:
-            return True
-        if self.w > 0.0:
-            return True
-        return False
-
-    def reset_indices(self) -> None:
-        """Reset the indices."""
-        self.aid0 = -1
-        self.aid1 = -1
-        self.aid2 = -1
-
-    def setup(self, ind: int, aid: int) -> None:
-        """Set up the angle data."""
-        if aid == 0:
-            self.aid0 = ind
-        elif aid == 1:
-            self.aid1 = ind
-        elif aid == 2:
-            self.aid2 = ind
-        else:
-            raise ValueError(f"Invalid data {ind=} {aid=}")
-
-    @staticmethod
-    def calc_angle(ai: int, aj: int, ak: int, conf) -> float:
-        """Calculate the angle."""
-        crds = conf.GetPositions()
-        eps = 1e-6
-        theta, _, _, _, _, _ = AngleData._calc_angle_impl(ai, aj, ak, crds, eps)
-        return theta
-
-    @staticmethod
-    def _calc_angle_impl(
-        ai: int, aj: int, ak: int, crds: np.ndarray, eps: float = 1e-6
-    ) -> tuple[float, float, np.ndarray, float, np.ndarray, float]:
-        ri = crds[ai]
-        rj = crds[aj]
-        rk = crds[ak]
-
-        rij = ri - rj
-        rkj = rk - rj
-
-        # distances/norm
-        eij, Rij = unit_vec(rij, eps)
-        ekj, Rkj = unit_vec(rkj, eps)
-
-        # angle
-        costh = eij.dot(ekj)
-        costh = min(1.0, max(-1.0, costh))
-        theta = math.acos(costh)
-
-        return theta, costh, eij, Rij, ekj, Rkj
-
-    def calc(self, crds: np.ndarray) -> float:
-        """Calculate the angle energy."""
-        eps = 1e-6
-        theta, _, _, _, _, _ = self._calc_angle_impl(
-            self.aid0, self.aid1, self.aid2, crds, eps
-        )
-
-        th2 = self.th0 + self.slack
-        th1 = self.th0 - self.slack
-
-        if theta > th2:
-            delta = theta - th2
-        elif theta < th1:
-            delta = theta - th1
-        else:
-            return 0
-
-        ene = self.w * delta * delta
-        return ene
-
-    def grad(self, crds: np.ndarray, grad: np.ndarray) -> None:
-        """Calculate the gradient."""
-        eps = 1e-6
-        theta, costh, eij, Rij, ekj, Rkj = self._calc_angle_impl(
-            self.aid0, self.aid1, self.aid2, crds, eps
-        )
-
-        th2 = self.th0 + self.slack
-        th1 = self.th0 - self.slack
-
-        if theta > th2:
-            delta = theta - th2
-        elif theta < th1:
-            delta = theta - th1
-        else:
-            return
-
-        # calc gradient
-        df = 2.0 * self.w * delta
-
-        sinth = math.sqrt(max(0.0, 1.0 - costh * costh))
-        Dij = df / (max(eps, sinth) * Rij)
-        Dkj = df / (max(eps, sinth) * Rkj)
-
-        vec_dij = Dij * (costh * eij - ekj)
-        vec_dkj = Dkj * (costh * ekj - eij)
-
-        grad[self.aid0] += vec_dij
-        grad[self.aid1] -= vec_dij
-        grad[self.aid2] += vec_dkj
-        grad[self.aid1] -= vec_dkj
-
-    def print(self, crds: np.ndarray) -> None:
-        """Print the bond data."""
-        theta, _, _, _, _, _ = self._calc_angle_impl(
-            self.aid0, self.aid1, self.aid2, crds
-        )
-
-        print(  # noqa: T201
-            f"A {self.aid0}-{self.aid1}-{self.aid2}:"
-            f" cur {math.degrees(theta):.2f}"
-            f" ref {math.degrees(self.th0):.2f}"
-            f" dif {math.degrees(theta - self.th0):.2f}"
-        )
+from .chiral_data import ChiralData, calc_chiral_vol
+from .angle_restr_data import AngleData, get_angle_idxs
+from .bond_restr_data import BondData
 
 
 class Restraints:
@@ -472,6 +41,9 @@ class Restraints:
         self.chiral_config = config.get("chiral", {})
         self.bond_config = config.get("bond", {})
         self.angle_config = config.get("angle", {})
+
+        self.method = self.config.get("method", "CG")
+        self.max_iter = int(self.config.get("max_iter", "100"))
 
     def _create_bond_data(self, d: float) -> BondData:
         return BondData(
@@ -577,7 +149,8 @@ class Restraints:
 
     def make_angle_restraints(self, mol, conf, atoms, atom_names=None) -> None:
         idxs = get_angle_idxs(mol)
-        print(f"{idxs=}")
+        if self.verbose:
+            print(f"{idxs=}")
         for idx in idxs:
             ai, aj, ak = idx
             if atom_names is not None:
@@ -655,9 +228,55 @@ class Restraints:
             if ch.is_valid():
                 print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
 
+        self.show_start()
+
     def show_start(self) -> None:
         """Show the start."""
-        print(f"{self.method=}")  # noqa: T201
+        print("=== start restr ===")
+        print(f"{self.method=} {self.max_iter=}")
+
+    def print_stat_tensor(self, crds_in) -> None:
+        crds = crds_in.detach().cpu().numpy()
+        crds = crds[:, self.active_sites, :]
+        self.print_stat(crds)
+
+    def print_stat(self, crds) -> None:
+        """Print the statistics."""
+        nbatch = crds.shape[0]
+        for i in range(nbatch):
+            ch_ene = 0.0
+            ch_sd = 0.0
+            for ch in self.chiral_data:
+                if self.verbose:
+                    ch.print(crds[i])
+                ch_sd += ch.calc_sd(crds[i])
+                ch_ene += ch.calc(crds[i])
+            print(f"chiral E={ch_ene:.5f}")
+            ch_rmsd = np.sqrt(ch_sd/len(self.chiral_data))
+            print(f"chiral rmsd={ch_rmsd:.5f}")
+
+            b_ene = 0.0
+            b_sd = 0.0
+            for b in self.bond_data:
+                if self.verbose:
+                    b.print(crds[i])
+                b_ene += b.calc(crds[i])
+                b_sd += b.calc_sd(crds[i])
+            print(f"bond E={b_ene:.5f}")
+            b_rmsd = np.sqrt(b_sd/len(self.bond_data))
+            print(f"bond rmsd={b_rmsd:.5f}")
+
+            a_ene = 0.0
+            a_sd = 0.0
+            for a in self.angle_data:
+                if self.verbose:
+                    a.print(crds[i])
+                a_ene += a.calc(crds[i])
+                a_sd += a.calc_sd(crds[i])
+            print(f"angle E={a_ene:.5f}")
+            a_rmsd = np.sqrt(a_sd/len(self.angle_data))
+            print(f"angle rmsd={a_rmsd:.5f}")
+
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
@@ -671,8 +290,6 @@ class Restraints:
 
         device = batch_crds_in.device
         crds_in = batch_crds_in
-        method = self.config.get("method", "CG")
-        max_iter = int(self.config.get("max_iter", "100"))
 
         if self.verbose:
             print(f"=== minimization {istep} ===")  # noqa: T201
@@ -685,8 +302,9 @@ class Restraints:
         # print(f"{crds.shape=}")
         crds = crds.reshape(-1)
 
+        options = {"maxiter": self.max_iter}
         opt = optimize.minimize(
-            self.calc, crds, jac=self.grad, method=method, options={"maxiter": max_iter}
+            self.calc, crds, jac=self.grad, method=self.method, options=options
         )
         # print(f"{opt=}")
 
@@ -694,44 +312,15 @@ class Restraints:
         crds_in[:, self.active_sites, :] = torch.tensor(crds).to(device)
 
         if self.verbose:
-            for i in range(self.nbatch):
-                ch_ene = 0.0
-                for ch in self.chiral_data:
-                    ch.print(crds[i])
-                    ch_ene += ch.calc(crds[i])
-                print(f"chiral E={ch_ene}")
-                b_ene = 0.0
-                for b in self.bond_data:
-                    b.print(crds[i])
-                    b_ene += b.calc(crds[i])
-                print(f"bond E={b_ene}")
-                a_ene = 0.0
-                for a in self.angle_data:
-                    a.print(crds[i])
-                    a_ene += a.calc(crds[i])
-                print(f"angle E={a_ene}")
+            self.print_stat(crds)
 
-        # for ind in range(nbatch):
-        #     crds_in = batch_crds_in[ind]
-        #     if len(self.chiral_data) == 0:
-        #         return
-        #     if self.verbose:
-        #         print(f"=== minimization {istep} ===")  # noqa: T201
-        #     crds = crds_in.detach().cpu().numpy()
-        #     crds = crds[self.active_sites, :]
-        #     # print(f"{crds.shape=}")
-        #     crds = crds.reshape(-1)
-        #     method = self.config.get("method", "CG")
-
-        #     opt = optimize.minimize(
-        #         self.calc, crds, jac=self.grad, method=method
-        #     )  # , tol=1e-4)
-        #     # print(f"{opt=}")
-
-        #     device = crds_in.device
-        #     crds = opt.x.reshape(-1, 3)
-        #     # crds_in[:, :] = torch.tensor(crds).to(device)
-        #     crds_in[self.active_sites, :] = torch.tensor(crds).to(device)
+    def finalize(self, batch_crds_in: torch.Tensor, istep: int) -> None:
+        """Finalize the restraints."""
+        if len(self.chiral_data) == 0:
+            return
+        print(f"=== final stats {istep} ===")
+        self.print_stat_tensor(batch_crds_in)
+            
 
     def calc(self, crds_in: np.ndarray) -> float:
         """Calculate energy."""

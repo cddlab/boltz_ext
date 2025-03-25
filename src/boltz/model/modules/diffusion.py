@@ -546,8 +546,7 @@ class AtomDiffusion(Module):
             atom_coords = atom_coords_next
             i += 1
 
-        if restr.start_sigma < 0:
-            restr.minimize(atom_coords, i, -100)
+        restr.finalize(atom_coords, i)
         return dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
 
     def loss_weight(self, sigma):
