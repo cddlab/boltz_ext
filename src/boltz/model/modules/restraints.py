@@ -73,8 +73,8 @@ class ChiralData:
         v3 = a3 - a0
         vol = np.dot(v1, np.cross(v2, v3))
         print(  # noqa: T201
-            f"{self.aid0}-{self.aid1}-{self.aid2}-{self.aid3}:"
-            f" {vol=:.2f} {self.chiral_vol=:.2f}"
+            f"C {self.aid0}-{self.aid1}-{self.aid2}-{self.aid3}:"
+            f" cur {vol:.2f} ref {self.chiral_vol:.2f} dif {vol - self.chiral_vol:.2f}"
         )
 
     def is_valid(self) -> bool:
@@ -287,6 +287,18 @@ class BondData:
         grad[self.aid0] += v1 * con
         grad[self.aid1] -= v1 * con
 
+    def print(self, crds: np.ndarray) -> None:
+        """Print the bond data."""
+        a0 = crds[self.aid0]
+        a1 = crds[self.aid1]
+        v1 = a0 - a1
+        n1l = length(v1)
+
+        print(  # noqa: T201
+            f"B {self.aid0}-{self.aid1}:"
+            f" cur {n1l:.2f} ref {self.r0:.2f} dif {n1l - self.r0:.2f}"
+        )
+
 
 _angl_patt = Chem.MolFromSmarts("*~*~*")
 
@@ -415,6 +427,19 @@ class AngleData:
         grad[self.aid1] -= vec_dij
         grad[self.aid2] += vec_dkj
         grad[self.aid1] -= vec_dkj
+
+    def print(self, crds: np.ndarray) -> None:
+        """Print the bond data."""
+        theta, _, _, _, _, _ = self._calc_angle_impl(
+            self.aid0, self.aid1, self.aid2, crds
+        )
+
+        print(  # noqa: T201
+            f"A {self.aid0}-{self.aid1}-{self.aid2}:"
+            f" cur {math.degrees(theta):.2f}"
+            f" ref {math.degrees(self.th0):.2f}"
+            f" dif {math.degrees(theta - self.th0):.2f}"
+        )
 
 
 class Restraints:
@@ -559,13 +584,19 @@ class Restraints:
                 an1 = mol.GetAtomWithIdx(int(ai)).GetProp("name")
                 an2 = mol.GetAtomWithIdx(int(aj)).GetProp("name")
                 an3 = mol.GetAtomWithIdx(int(ak)).GetProp("name")
-                if an1 not in atom_names or an2 not in atom_names or an3 not in atom_names:
+                if (
+                    an1 not in atom_names
+                    or an2 not in atom_names
+                    or an3 not in atom_names
+                ):
                     print(f"skip {an1=} {an2=} {an3=}")
                     continue
 
             self.make_angle(ai, aj, ak, mol, conf, atoms)
 
-    def make_chiral_impl(self, ai: int, aj: list[int], mol, conf, atoms, invert: bool = False) -> None:
+    def make_chiral_impl(
+        self, ai: int, aj: list[int], mol, conf, atoms, invert: bool = False
+    ) -> None:
         chiral_vol = calc_chiral_vol(conf.GetPositions(), ai, aj)
         if invert:
             chiral_vol = -chiral_vol
@@ -624,6 +655,10 @@ class Restraints:
             if ch.is_valid():
                 print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
 
+    def show_start(self) -> None:
+        """Show the start."""
+        print(f"{self.method=}")  # noqa: T201
+
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
         if sigma_t > self.start_sigma:
@@ -667,10 +702,12 @@ class Restraints:
                 print(f"chiral E={ch_ene}")
                 b_ene = 0.0
                 for b in self.bond_data:
+                    b.print(crds[i])
                     b_ene += b.calc(crds[i])
                 print(f"bond E={b_ene}")
                 a_ene = 0.0
                 for a in self.angle_data:
+                    a.print(crds[i])
                     a_ene += a.calc(crds[i])
                 print(f"angle E={a_ene}")
 

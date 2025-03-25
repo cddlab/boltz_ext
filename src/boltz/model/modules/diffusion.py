@@ -541,10 +541,13 @@ class AtomDiffusion(Module):
                 atom_coords_noisy
                 + self.step_scale * (sigma_t - t_hat) * denoised_over_sigma
             )
+            # print(f"{i=}, {sigma_t=}, {t_hat=}, {sigma_t/t_hat=}")
 
             atom_coords = atom_coords_next
             i += 1
 
+        if restr.start_sigma < 0:
+            restr.minimize(atom_coords, i, -100)
         return dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
 
     def loss_weight(self, sigma):
