@@ -14,7 +14,8 @@ class BondData:
     r0: float
     slack: float = 0
     w: float = 0.05
-    # fmax: float = 100.0
+
+    half: bool = False
 
     def is_valid(self) -> bool:
         """Check if the bond data is valid."""
@@ -54,6 +55,11 @@ class BondData:
             delta = n1l - r1
         else:
             return 0
+
+        if self.half and delta < 0:
+            # If half bond and delta is negative, no energy contribution
+            return 0.0
+
         ene = self.w * delta * delta
         return ene
 
@@ -75,8 +81,13 @@ class BondData:
         else:
             return
 
+        if self.half and 1.0 < delta:
+            # If half bond and delta is negative, no gradient contribution
+            return
+
         con = 2.0 * self.w * (1.0 - delta)
-        grad[self.aid0] += v1 * con
+        if not self.half:
+            grad[self.aid0] += v1 * con
         grad[self.aid1] -= v1 * con
 
     def print(self, crds: np.ndarray) -> None:

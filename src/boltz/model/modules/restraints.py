@@ -45,13 +45,14 @@ class Restraints:
         self.method = self.config.get("method", "CG")
         self.max_iter = int(self.config.get("max_iter", "100"))
 
-    def _create_bond_data(self, d: float) -> BondData:
+    def _create_bond_data(self, d: float, half: bool = False) -> BondData:
         return BondData(
             -1,
             -1,
             d,
             w=self.bond_config.get("weight", 0.05),
             slack=self.bond_config.get("slack", 0),
+            half=half,
         )
 
     def _create_angle_data(self, th0: float) -> AngleData:
@@ -87,9 +88,11 @@ class Restraints:
         self.register_site(atoms[ai], lambda x: bnd.setup(x, 0))
         self.register_site(atoms[aj], lambda x: bnd.setup(x, 1))
 
-    def make_link_bond(self, ai1: int, atoms1, ai2: int, atoms2, ideal: float) -> None:
+    def make_link_bond(
+        self, ai1: int, atoms1, ai2: int, atoms2, ideal: float, half: bool = False
+    ) -> None:
         """Make link bond."""
-        bnd = self._create_bond_data(ideal)
+        bnd = self._create_bond_data(ideal, half=half)
         self.bond_data.append(bnd)
 
         self.register_site(atoms1[ai1], lambda x: bnd.setup(x, 0))
@@ -127,6 +130,7 @@ class Restraints:
             atom1 = bond_cfg["atom1"]
             atom2 = bond_cfg["atom2"]
             r0 = bond_cfg["r0"]
+            half = bond_cfg.get("half", False)
 
             ai1, atoms1 = self._get_parsed_atom(chains, atom1)
             if ai1 is None:
@@ -136,7 +140,7 @@ class Restraints:
             if ai2 is None:
                 print(f"{atom2=} not found")
                 continue
-            self.make_link_bond(ai1, atoms1, ai2, atoms2, r0)
+            self.make_link_bond(ai1, atoms1, ai2, atoms2, r0, half=half)
 
     def make_angle(self, ai, aj, ak, mol, conf, atoms) -> None:
         """Make angle data."""
@@ -244,48 +248,48 @@ class Restraints:
         """Print the statistics."""
         nbatch = crds.shape[0]
         for i in range(nbatch):
-            ch_ene = 0.0
-            ch_sd = 0.0
-            for ch in self.chiral_data:
-                if self.verbose:
-                    ch.print(crds[i])
-                ch_sd += ch.calc_sd(crds[i])
-                ch_ene += ch.calc(crds[i])
-            print(f"chiral E={ch_ene:.5f}")
-            ch_rmsd = np.sqrt(ch_sd/len(self.chiral_data))
-            print(f"chiral rmsd={ch_rmsd:.5f}")
+            if len(self.chiral_data) > 0:
+                ch_ene = 0.0
+                ch_sd = 0.0
+                for ch in self.chiral_data:
+                    if self.verbose:
+                        ch.print(crds[i])
+                    ch_sd += ch.calc_sd(crds[i])
+                    ch_ene += ch.calc(crds[i])
+                print(f"chiral E={ch_ene:.5f}")
+                ch_rmsd = np.sqrt(ch_sd / len(self.chiral_data))
+                print(f"chiral rmsd={ch_rmsd:.5f}")
 
-            b_ene = 0.0
-            b_sd = 0.0
-            for b in self.bond_data:
-                if self.verbose:
-                    b.print(crds[i])
-                b_ene += b.calc(crds[i])
-                b_sd += b.calc_sd(crds[i])
-            print(f"bond E={b_ene:.5f}")
-            b_rmsd = np.sqrt(b_sd/len(self.bond_data))
-            print(f"bond rmsd={b_rmsd:.5f}")
+            if len(self.bond_data) > 0:
+                b_ene = 0.0
+                b_sd = 0.0
+                for b in self.bond_data:
+                    if self.verbose:
+                        b.print(crds[i])
+                    b_ene += b.calc(crds[i])
+                    b_sd += b.calc_sd(crds[i])
+                print(f"bond E={b_ene:.5f}")
+                b_rmsd = np.sqrt(b_sd / len(self.bond_data))
+                print(f"bond rmsd={b_rmsd:.5f}")
 
-            a_ene = 0.0
-            a_sd = 0.0
-            for a in self.angle_data:
-                if self.verbose:
-                    a.print(crds[i])
-                a_ene += a.calc(crds[i])
-                a_sd += a.calc_sd(crds[i])
-            print(f"angle E={a_ene:.5f}")
-            a_rmsd = np.sqrt(a_sd/len(self.angle_data))
-            print(f"angle rmsd={a_rmsd:.5f}")
-
+            if len(self.angle_data) > 0:
+                a_ene = 0.0
+                a_sd = 0.0
+                for a in self.angle_data:
+                    if self.verbose:
+                        a.print(crds[i])
+                    a_ene += a.calc(crds[i])
+                    a_sd += a.calc_sd(crds[i])
+                print(f"angle E={a_ene:.5f}")
+                a_rmsd = np.sqrt(a_sd / len(self.angle_data))
+                print(f"angle rmsd={a_rmsd:.5f}")
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
         if sigma_t > self.start_sigma:
             return
-        # if not (self.start_step <= istep < self.end_step):
-        #     return
 
-        if len(self.chiral_data) == 0:
+        if len(self.chiral_data) == 0 and len(self.bond_data) == 0:
             return
 
         device = batch_crds_in.device
@@ -320,7 +324,6 @@ class Restraints:
             return
         print(f"=== final stats {istep} ===")
         self.print_stat_tensor(batch_crds_in)
-            
 
     def calc(self, crds_in: np.ndarray) -> float:
         """Calculate energy."""
