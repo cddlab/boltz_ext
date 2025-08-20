@@ -6,9 +6,12 @@ import numpy as np
 import torch
 from rdkit import Chem
 from scipy import optimize
+import torchmin
 from .chiral_data import ChiralData, calc_chiral_vol
 from .angle_restr_data import AngleData, get_angle_idxs
 from .bond_restr_data import BondData
+
+from .torch_restr_impl import RestrTorchImpl, MyScalarFunc
 
 
 class Restraints:
@@ -34,6 +37,7 @@ class Restraints:
         self.config = config
 
         self.verbose = config.get("verbose", False)
+        self.gpu = config.get("gpu", False)
         # self.start_step = config.get("start_step", 50)
         # self.end_step = config.get("end_step", 999)
         self.start_sigma = config.get("start_sigma", 1.0)
@@ -206,7 +210,7 @@ class Restraints:
             return None
         return self.sites[index - 1]
 
-    def setup_site(self, feat_restr_in: torch.Tensor) -> None:
+    def setup_site(self, feat_restr_in: torch.Tensor, nbatch:int) -> None:
         """Set up the restraintsites."""
         self.reset_indices()
         feat_restr = feat_restr_in[0].detach().cpu().numpy()
@@ -217,7 +221,9 @@ class Restraints:
             if sid == 0:
                 continue
             self.active_sites.append(ind)
-        print(f"{self.active_sites=}")
+        print(f"{len(self.active_sites)=}")
+        if len(self.active_sites) == 0:
+            return
 
         for i, ind in enumerate(self.active_sites):
             sid = int(feat_restr[ind])
@@ -228,10 +234,18 @@ class Restraints:
                 tgt(i)
                 # tgt(ind)
 
-        for ch in self.chiral_data:
-            if ch.is_valid():
-                print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
+        if self.verbose:
+            for ch in self.chiral_data:
+                if ch.is_valid():
+                    print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
 
+        if self.gpu:
+            natoms = len(self.active_sites)
+            print(f"GPU {nbatch=}, {natoms=}")
+            device = feat_restr_in.device
+            self.torch_impl = RestrTorchImpl(
+                self.bond_data, self.angle_data, self.chiral_data, nbatch, natoms, device
+            )
         self.show_start()
 
     def show_start(self) -> None:
@@ -286,6 +300,10 @@ class Restraints:
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
+        if self.gpu:
+            self.minimize_gpu(batch_crds_in, istep, sigma_t)
+            return
+
         if sigma_t > self.start_sigma:
             return
 
@@ -317,6 +335,36 @@ class Restraints:
 
         if self.verbose:
             self.print_stat(crds)
+        print(f"step {istep} done")
+
+    def minimize_gpu(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
+        """Minimize the restraints."""
+        if sigma_t > self.start_sigma:
+            return
+
+        if len(self.chiral_data) == 0 and len(self.bond_data) == 0:
+            return
+
+        crds_in = batch_crds_in
+
+        if self.verbose:
+            print(f"=== minimization {istep} ===")  # noqa: T201
+        crds = crds_in[:, self.active_sites, :]
+        # crds = crds.reshape(-1)
+
+        options = {"max_iter": self.max_iter}
+        func = MyScalarFunc(self.torch_impl, x_shape=crds.shape)
+        opt = torchmin.minimize(
+            func, crds, method=self.method, options=options
+        )
+
+        crds = opt.x # .reshape(self.nbatch, self.natoms, 3)
+        # print(f"{crds.shape=}")
+        crds_in[:, self.active_sites, :] = crds
+
+        if self.verbose:
+            self.print_stat(crds)
+        print(f"step {istep} done")
 
     def finalize(self, batch_crds_in: torch.Tensor, istep: int) -> None:
         """Finalize the restraints."""
@@ -343,9 +391,19 @@ class Restraints:
         # print(f"calc: {ene=}")
         return ene
 
+    # def grad_gpu(self, crds_in: np.ndarray) -> np.ndarray:
+    #     crds = crds_in.reshape(self.nbatch, self.natoms, 3)
+    #     gpu_grad = self.torch_impl.grad(crds)
+    #     # print(f"{gpu_grad=}")
+    #     # print(f"{gpu_grad.cpu().numpy() - grad}")
+    #     grad = gpu_grad.cpu().numpy()
+    #     grad = grad.reshape(-1)
+    #     return grad
+
     def grad(self, crds_in: np.ndarray) -> np.ndarray:
         """Calculate gradient."""
         crds = crds_in.reshape(self.nbatch, self.natoms, 3)
+
         grad = np.zeros_like(crds)
         # print(f"grad: {crds.shape=}")
         # print(f"grad: {grad.shape=}")
@@ -370,3 +428,22 @@ class Restraints:
             b.reset_indices()
         for a in self.angle_data:
             a.reset_indices()
+
+
+        # grad = np.zeros_like(crds)
+        # for i in range(self.nbatch):
+        #     for ch in self.chiral_data:
+        #         if ch.is_valid():
+        #             ch.grad(crds[i], grad[i])
+        #     for a in self.angle_data:
+        #         if a.is_valid():
+        #             a.grad(crds[i], grad[i])
+        #     for b in self.bond_data:
+        #         if b.is_valid():
+        #             b.grad(crds[i], grad[i])
+        # print(f"CPU {grad=}")
+
+        # gpu_grad = self.torch_impl.grad(crds)
+        # print(f"{gpu_grad=}")
+        # print(f"{gpu_grad.cpu().numpy() - grad}")
+

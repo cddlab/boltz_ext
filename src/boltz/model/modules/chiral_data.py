@@ -97,6 +97,7 @@ class ChiralData:
         v2 = a2 - a0
         v3 = a3 - a0
         vol = np.dot(v1, np.cross(v2, v3))
+        # print(f"{vol=}")
 
         if self.chiral_vol > 0:
             thr = self.chiral_vol - self.slack
