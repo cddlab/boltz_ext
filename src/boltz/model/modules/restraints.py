@@ -300,21 +300,22 @@ class Restraints:
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
-        if self.gpu:
-            self.minimize_gpu(batch_crds_in, istep, sigma_t)
-            return
-
         if sigma_t > self.start_sigma:
             return
 
         if len(self.chiral_data) == 0 and len(self.bond_data) == 0:
             return
 
+        if self.verbose:
+            print(f"=== minimization {istep} ===")  # noqa: T201
+
+        if self.gpu:
+            self.minimize_gpu(batch_crds_in, istep)
+            return
+
         device = batch_crds_in.device
         crds_in = batch_crds_in
 
-        if self.verbose:
-            print(f"=== minimization {istep} ===")  # noqa: T201
         crds = crds_in.detach().cpu().numpy()
         crds = crds[:, self.active_sites, :]
         self.nbatch = crds.shape[0]
@@ -337,30 +338,20 @@ class Restraints:
             self.print_stat(crds)
         print(f"step {istep} done")
 
-    def minimize_gpu(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
+    def minimize_gpu(self, crds_in: torch.Tensor, istep: int) -> None:
         """Minimize the restraints."""
-        if sigma_t > self.start_sigma:
-            return
-
-        if len(self.chiral_data) == 0 and len(self.bond_data) == 0:
-            return
-
-        crds_in = batch_crds_in
-
-        if self.verbose:
-            print(f"=== minimization {istep} ===")  # noqa: T201
         crds = crds_in[:, self.active_sites, :]
-        # crds = crds.reshape(-1)
 
-        options = {"max_iter": self.max_iter}
+        options = {"max_iter": self.max_iter, "gtol": 1e-3}
         func = MyScalarFunc(self.torch_impl, x_shape=crds.shape)
         opt = torchmin.minimize(
             func, crds, method=self.method, options=options
         )
 
-        crds = opt.x # .reshape(self.nbatch, self.natoms, 3)
-        # print(f"{crds.shape=}")
-        crds_in[:, self.active_sites, :] = crds
+        print(f"{opt.message=}")
+        print(f"{opt.success=}")
+        print(f"{opt.status=}")
+        crds_in[:, self.active_sites, :] = opt.x
 
         if self.verbose:
             self.print_stat(crds)
