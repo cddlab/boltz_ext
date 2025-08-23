@@ -60,9 +60,13 @@ class ChiralData:
 
     def is_valid(self) -> bool:
         """Check if the chiral data is valid."""
-        if self.aid0 >= 0 and self.aid1 >= 0 and self.aid2 >= 0 and self.aid3 >= 0:
-            return True
-        if self.w > 0.0:
+        if (
+            self.aid0 >= 0
+            and self.aid1 >= 0
+            and self.aid2 >= 0
+            and self.aid3 >= 0
+            and self.w > 0.0
+        ):
             return True
         return False
 

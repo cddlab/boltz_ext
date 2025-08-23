@@ -4,6 +4,7 @@ import torch
 from .bond_restr_data import BondData
 from .angle_restr_data import AngleData
 from .chiral_data import ChiralData
+from torchmin.function import sf_value, ScalarFunction, de_value
 
 
 def calculate_distances(atom_pos: torch.Tensor, atom_idx: torch.Tensor):
@@ -49,6 +50,8 @@ class RestrTorchImpl:
         r0s = []
         for ib in range(nbatch):
             for bond in bond_data:
+                if not bond.is_valid():
+                    continue
                 aid0 = bond.aid0 + ib * natoms
                 aid1 = bond.aid1 + ib * natoms
                 data.append([aid0, aid1])
@@ -74,6 +77,8 @@ class RestrTorchImpl:
         r0s = []
         for ib in range(nbatch):
             for angle in angle_data:
+                if not angle.is_valid():
+                    continue
                 aid0 = angle.aid0 + ib * natoms
                 aid1 = angle.aid1 + ib * natoms
                 aid2 = angle.aid2 + ib * natoms
@@ -99,6 +104,8 @@ class RestrTorchImpl:
         r0s = []
         for ib in range(nbatch):
             for ch in ch_data:
+                if not ch.is_valid():
+                    continue
                 aid0 = ch.aid0 + ib * natoms
                 aid1 = ch.aid1 + ib * natoms
                 aid2 = ch.aid2 + ib * natoms
@@ -225,9 +232,6 @@ class RestrTorchImpl:
         gpu_grad = gpu_grad.reshape(-1)
         # print(f"{gpu_grad.shape=}")
         return gpu_grad, f
-
-
-from torchmin.function import sf_value, ScalarFunction, de_value
 
 
 class MyScalarFunc(ScalarFunction):

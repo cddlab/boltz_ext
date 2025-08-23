@@ -19,11 +19,7 @@ class BondData:
 
     def is_valid(self) -> bool:
         """Check if the bond data is valid."""
-        if self.aid0 >= 0 and self.aid1 >= 0:
-            return True
-        if self.w > 0.0:
-            return True
-        return False
+        return self.aid0 >= 0 and self.aid1 >= 0 and self.w > 0.0
 
     def reset_indices(self) -> None:
         """Reset the indices."""

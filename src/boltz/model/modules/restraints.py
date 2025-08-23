@@ -210,7 +210,7 @@ class Restraints:
             return None
         return self.sites[index - 1]
 
-    def setup_site(self, feat_restr_in: torch.Tensor, nbatch:int) -> None:
+    def setup_site(self, feat_restr_in: torch.Tensor, nbatch: int) -> None:
         """Set up the restraintsites."""
         self.reset_indices()
         feat_restr = feat_restr_in[0].detach().cpu().numpy()
@@ -244,7 +244,12 @@ class Restraints:
             print(f"GPU {nbatch=}, {natoms=}")
             device = feat_restr_in.device
             self.torch_impl = RestrTorchImpl(
-                self.bond_data, self.angle_data, self.chiral_data, nbatch, natoms, device
+                self.bond_data,
+                self.angle_data,
+                self.chiral_data,
+                nbatch,
+                natoms,
+                device,
             )
         self.show_start()
 
@@ -262,41 +267,45 @@ class Restraints:
         """Print the statistics."""
         nbatch = crds.shape[0]
         for i in range(nbatch):
-            if len(self.chiral_data) > 0:
+            print(f"batch {i}")
+            chs = [ch for ch in self.chiral_data if ch.is_valid()]
+            if len(chs) > 0:
                 ch_ene = 0.0
                 ch_sd = 0.0
-                for ch in self.chiral_data:
+                for ch in chs:
                     if self.verbose:
                         ch.print(crds[i])
                     ch_sd += ch.calc_sd(crds[i])
                     ch_ene += ch.calc(crds[i])
-                print(f"chiral E={ch_ene:.5f}")
+                print(f"  chiral E={ch_ene:.5f}")
                 ch_rmsd = np.sqrt(ch_sd / len(self.chiral_data))
-                print(f"chiral rmsd={ch_rmsd:.5f}")
+                print(f"  chiral rmsd={ch_rmsd:.5f}")
 
-            if len(self.bond_data) > 0:
+            bonds = [b for b in self.bond_data if b.is_valid()]
+            if len(bonds) > 0:
                 b_ene = 0.0
                 b_sd = 0.0
-                for b in self.bond_data:
+                for b in bonds:
                     if self.verbose:
                         b.print(crds[i])
                     b_ene += b.calc(crds[i])
                     b_sd += b.calc_sd(crds[i])
-                print(f"bond E={b_ene:.5f}")
+                print(f"  bond E={b_ene:.5f}")
                 b_rmsd = np.sqrt(b_sd / len(self.bond_data))
-                print(f"bond rmsd={b_rmsd:.5f}")
+                print(f"  bond rmsd={b_rmsd:.5f}")
 
-            if len(self.angle_data) > 0:
+            angls = [a for a in self.angle_data if a.is_valid()]
+            if len(angls) > 0:
                 a_ene = 0.0
                 a_sd = 0.0
-                for a in self.angle_data:
+                for a in angls:
                     if self.verbose:
                         a.print(crds[i])
                     a_ene += a.calc(crds[i])
                     a_sd += a.calc_sd(crds[i])
-                print(f"angle E={a_ene:.5f}")
+                print(f"  angle E={a_ene:.5f}")
                 a_rmsd = np.sqrt(a_sd / len(self.angle_data))
-                print(f"angle rmsd={a_rmsd:.5f}")
+                print(f"  angle rmsd={a_rmsd:.5f}")
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
@@ -344,17 +353,17 @@ class Restraints:
 
         options = {"max_iter": self.max_iter, "gtol": 1e-3}
         func = MyScalarFunc(self.torch_impl, x_shape=crds.shape)
-        opt = torchmin.minimize(
-            func, crds, method=self.method, options=options
-        )
-
-        print(f"{opt.message=}")
-        print(f"{opt.success=}")
-        print(f"{opt.status=}")
-        crds_in[:, self.active_sites, :] = opt.x
+        opt = torchmin.minimize(func, crds, method=self.method, options=options)
 
         if self.verbose:
-            self.print_stat(crds)
+            print(f"{opt.message=}")
+            print(f"{opt.success=}")
+            print(f"{opt.status=}")
+        # if self.verbose:
+        #     self.print_stat(crds)
+
+        crds_in[:, self.active_sites, :] = opt.x
+
         print(f"step {istep} done")
 
     def finalize(self, batch_crds_in: torch.Tensor, istep: int) -> None:
@@ -381,15 +390,6 @@ class Restraints:
                     ene += a.calc(crds[i])
         # print(f"calc: {ene=}")
         return ene
-
-    # def grad_gpu(self, crds_in: np.ndarray) -> np.ndarray:
-    #     crds = crds_in.reshape(self.nbatch, self.natoms, 3)
-    #     gpu_grad = self.torch_impl.grad(crds)
-    #     # print(f"{gpu_grad=}")
-    #     # print(f"{gpu_grad.cpu().numpy() - grad}")
-    #     grad = gpu_grad.cpu().numpy()
-    #     grad = grad.reshape(-1)
-    #     return grad
 
     def grad(self, crds_in: np.ndarray) -> np.ndarray:
         """Calculate gradient."""
@@ -420,7 +420,6 @@ class Restraints:
         for a in self.angle_data:
             a.reset_indices()
 
-
         # grad = np.zeros_like(crds)
         # for i in range(self.nbatch):
         #     for ch in self.chiral_data:
@@ -437,4 +436,3 @@ class Restraints:
         # gpu_grad = self.torch_impl.grad(crds)
         # print(f"{gpu_grad=}")
         # print(f"{gpu_grad.cpu().numpy() - grad}")
-
