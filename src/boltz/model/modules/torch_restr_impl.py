@@ -5,6 +5,7 @@ from .bond_restr_data import BondData
 from .angle_restr_data import AngleData
 from .chiral_data import ChiralData
 from torchmin.function import sf_value, ScalarFunction, de_value
+import torch_cluster
 
 
 def calculate_distances(atom_pos: torch.Tensor, atom_idx: torch.Tensor):
@@ -38,6 +39,7 @@ class RestrTorchImpl:
         self.setup_bonds(bond_data, nbatch, natoms)
         self.setup_angles(angle_data, nbatch, natoms)
         self.setup_chirals(chiral_data, nbatch, natoms)
+        # self.setup_vdw(natoms, nbatch)
 
     def setup_bonds(
         self,
@@ -119,6 +121,68 @@ class RestrTorchImpl:
         # print(f"Chiral indices: {atom_idx=}")
         # print(f"Chiral r0s: {gpu_r0s=}")
         # return atom_idx, gpu_r0s
+
+    def setup_vdw(
+        self, natoms: int, nbatch: int, ligand_atoms: list[int], config
+    ) -> None:
+        self.vdw_k = config.get("weight", None)
+        if self.vdw_k is None or self.vdw_k <= 0:
+            self.use_vdw = False
+        else:
+            self.use_vdw = True
+
+        device = self.device
+        self.ligand_idx = ligand_atoms
+        self.prot_idx = [i for i in range(natoms) if i not in ligand_atoms]
+        self.lig_batch = torch.arange(nbatch, device=device).repeat_interleave(
+            len(self.ligand_idx)
+        )
+        self.prot_batch = torch.arange(nbatch, device=device).repeat_interleave(
+            len(self.prot_idx)
+        )
+        # print(f"{self.lig_batch=}")
+        # print(f"{self.prot_batch=}")
+
+        self.lind_flat = (
+            torch.tensor(self.ligand_idx, device=device).repeat(nbatch)
+            + self.lig_batch * natoms
+        )
+        self.pind_flat = (
+            torch.tensor(self.prot_idx, device=device).repeat(nbatch)
+            + self.prot_batch * natoms
+        )
+
+        self.vdw_r0 = config.get("r0", 2.5)
+        self.vdw_dmax = config.get("dmax", 5.0)
+
+    def update_vdw_idx(self, crds: torch.Tensor) -> None:
+        vdw_thr = self.vdw_dmax
+        # print(f"{crds.shape=} {crds.device=}")
+        prot_crds = crds[:, self.prot_idx, :].reshape(-1, 3)
+        lig_crds = crds[:, self.ligand_idx, :].reshape(-1, 3)
+
+        idx_j, idx_i = torch_cluster.radius(
+            x=prot_crds,
+            y=lig_crds,
+            batch_x=self.prot_batch,
+            batch_y=self.lig_batch,
+            r=vdw_thr,
+        )
+        if len(idx_i) > 0:
+            # i: protein / j: ligans
+            idx_i = self.pind_flat[idx_i]
+            idx_j = self.lind_flat[idx_j]
+
+            # print(f"{self.prot_idx=}")
+            # print(f"{idx_i=}")
+
+            # print(f"{self.ligand_idx=}")
+            # print(f"{idx_j=}")
+
+            vdw_idx = torch.stack([idx_i, idx_j], dim=1)
+            self.vdw_idx = vdw_idx
+        else:
+            self.vdw_idx = None
 
     def calc_bond_grad(
         self,
@@ -222,25 +286,44 @@ class RestrTorchImpl:
         atom_pos: torch.Tensor,
         grad: torch.Tensor,
     ) -> torch.Tensor:
-        """Calculate the bond force based on the positions and indices of atoms."""
+        """Calculate the vdw contact gradients."""
         dist, unit_vec, _ = calculate_distances(atom_pos, self.vdw_idx)
 
-        r0 = 2.5
-        vdw_k = 1.0
-
         # print(f"{dist=}")
-        x = dist - r0
+        x = dist - self.vdw_r0
         flag = x < 0
-        pot = vdw_k * x * x * flag
-        force = 2.0 * vdw_k * x * flag
+        pot = self.vdw_k * x * x * flag
+        force = 2.0 * self.vdw_k * x * flag
 
         forcevec = unit_vec * force[:, None]
-        grad.index_add_(0, self.vdw_idx[:, 0], forcevec)
+        # protein
+        # grad.index_add_(0, self.vdw_idx[:, 0], forcevec)
+        # ligand
         grad.index_add_(0, self.vdw_idx[:, 1], -forcevec)
 
         return pot.sum()
 
-    def grad(self, crds):
+    def print_vdw_stat(
+        self,
+        atom_pos: torch.Tensor,
+    ) -> torch.Tensor:
+        """Show the vdw contact status."""
+        atom_pos = atom_pos.reshape(-1, 3)
+
+        idx = (self.vdw_idx // self.natoms)[:, 0]
+        dist, unit_vec, _ = calculate_distances(atom_pos, self.vdw_idx)
+
+        x = dist - self.vdw_r0
+        flag = x < 0
+
+        for ib in range(self.nbatch):
+            print(f"Protein-Ligand contacts: batch {ib}")
+            d = dist[idx == ib]
+            f = flag[idx == ib]
+            print(f"  num of d < {self.vdw_r0}: {int(f.sum())}")
+            print(f"  min dist: {float(d.min())}")
+
+    def grad(self, crds: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         device = self.device
         # gpu_crds = torch.tensor(crds).to(device).reshape(-1, 3)
         # print(f"{crds.shape=}")
@@ -251,7 +334,7 @@ class RestrTorchImpl:
         f += self.calc_angle_grad(gpu_crds, gpu_grad)
         f += self.calc_chiral_grad(gpu_crds, gpu_grad)
 
-        if self.vdw_idx is not None:
+        if self.use_vdw and self.vdw_idx is not None:
             f += self.calc_vdw_grad(gpu_crds, gpu_grad)
 
         # print(f"{f.shape=}")

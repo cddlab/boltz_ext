@@ -12,7 +12,6 @@ from .angle_restr_data import AngleData, get_angle_idxs
 from .bond_restr_data import BondData
 
 from .torch_restr_impl import RestrTorchImpl, MyScalarFunc
-import torch_cluster
 
 
 class Restraints:
@@ -32,6 +31,7 @@ class Restraints:
         self.bond_data = []
         self.angle_data = []
         self.sites = []
+        self.torch_impl = None
 
     def set_config(self, config: dict) -> None:
         """Set the configuration."""
@@ -46,6 +46,7 @@ class Restraints:
         self.chiral_config = config.get("chiral", {})
         self.bond_config = config.get("bond", {})
         self.angle_config = config.get("angle", {})
+        self.vdw_config = config.get("vdw", {})
 
         self.method = self.config.get("method", "CG")
         self.max_iter = int(self.config.get("max_iter", "100"))
@@ -226,34 +227,12 @@ class Restraints:
             self.active_sites.append(ind)
 
         if self.gpu:
-            # for vdw force calc
-            self.ligand_idx = self.active_sites
-            self.prot_idx = [i for i in range(natoms) if i not in self.active_sites]
-            self.lig_batch = torch.arange(nbatch, device=device).repeat_interleave(
-                len(self.ligand_idx)
-            )
-            self.prot_batch = torch.arange(nbatch, device=device).repeat_interleave(
-                len(self.prot_idx)
-            )
-            print(f"{self.lig_batch=}")
-            print(f"{self.prot_batch=}")
-
-            self.lind_flat = (
-                torch.tensor(self.ligand_idx, device=device).repeat(nbatch)
-                + self.lig_batch * natoms
-            )
-            self.pind_flat = (
-                torch.tensor(self.prot_idx, device=device).repeat(nbatch)
-                + self.prot_batch * natoms
-            )
-            print(f"{self.lind_flat=}")
-            print(f"{self.pind_flat=}")
-
+            ligand_atoms = self.active_sites
             # all atoms are active sites
             self.active_sites = np.arange(natoms)
 
-        print(f"{len(self.active_sites)=}")
-        print(f"{self.active_sites=}")
+        # print(f"{len(self.active_sites)=}")
+        # print(f"{self.active_sites=}")
         if len(self.active_sites) == 0:
             return
 
@@ -272,7 +251,6 @@ class Restraints:
                     print(f"{ch.aid0}-{ch.aid1}-{ch.aid2}-{ch.aid3}")
 
         if self.gpu:
-            natoms = len(self.active_sites)
             print(f"GPU {nbatch=}, {natoms=}")
             self.torch_impl = RestrTorchImpl(
                 self.bond_data,
@@ -282,6 +260,8 @@ class Restraints:
                 natoms,
                 device,
             )
+            self.torch_impl.setup_vdw(natoms, nbatch, ligand_atoms, self.vdw_config)
+            
 
         self.show_start()
 
@@ -295,6 +275,10 @@ class Restraints:
         if not self.gpu:
             crds = crds[:, self.active_sites, :]
         self.print_stat(crds)
+
+        if self.torch_impl is not None:
+            self.torch_impl.update_vdw_idx(crds_in)
+            self.torch_impl.print_vdw_stat(crds_in)
 
     def print_stat(self, crds) -> None:
         """Print the statistics."""
@@ -340,6 +324,8 @@ class Restraints:
                 a_rmsd = np.sqrt(a_sd / len(self.angle_data))
                 print(f"  angle rmsd={a_rmsd:.5f}")
 
+                
+
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
         if sigma_t > self.start_sigma:
@@ -384,51 +370,10 @@ class Restraints:
         """Minimize the restraints."""
         # crds = crds_in[:, self.active_sites, :]
         crds = crds_in
-        vdw_thr = 5.0
-        # print(f"{crds.shape=} {crds.device=}")
-        prot_crds = crds[:, self.prot_idx, :].reshape(-1, 3)
-        lig_crds = crds[:, self.ligand_idx, :].reshape(-1, 3)
 
-        # print(f"{prot_crds.shape=}")
-        # print(f"{lig_crds.shape=}")
-        # d = prot_crds[:, None, :] - lig_crds[None, :, :]
-        # dist = torch.sqrt((d * d).sum(dim=2))
-        # dist = torch.where(dist < vdw_thr)
-        # # calc indices for dist < vdw_thr
-        # print(f"{dist=}")
-        # # print(f"{dist.sum()=}")
-
-        idx_j, idx_i = torch_cluster.radius(
-            x=prot_crds,
-            y=lig_crds,
-            batch_x=self.prot_batch,
-            batch_y=self.lig_batch,
-            r=vdw_thr,
-        )
-        if len(idx_i) > 0:
-            # print(f"{idx_i=}")
-            idx_i = self.pind_flat[idx_i]
-            # print(f"{self.prot_idx=}")
-            # print(f"{idx_i=}")
-
-            # print(f"{idx_j=}")
-            idx_j = self.lind_flat[idx_j]
-            # print(f"{self.ligand_idx=}")
-            # print(f"{idx_j=}")
-
-            vdw_idx = torch.stack([idx_i, idx_j], dim=1)
-            self.torch_impl.vdw_idx = vdw_idx
-        else:
-            self.torch_impl.vdw_idx = None
-
-        # print(f"{vdw_idx.shape=}")
-        # print(f"{vdw_idx=}")
-        # grad = torch.zeros_like(crds[0])
-        # vdw_e = self.torch_impl.calc_vdw_grad(crds[0], vdw_idx, grad)
-        # print(f"{vdw_e=}")
-        # print(f"{grad[idx_i]=}")
-
-        ##########
+        if self.torch_impl.use_vdw:
+            self.torch_impl.update_vdw_idx(crds)
+            # self.torch_impl.print_vdw_stat(crds)
 
         options = {"max_iter": self.max_iter, "gtol": 1e-3}
         func = MyScalarFunc(self.torch_impl, x_shape=crds.shape)
@@ -500,19 +445,3 @@ class Restraints:
         for a in self.angle_data:
             a.reset_indices()
 
-        # grad = np.zeros_like(crds)
-        # for i in range(self.nbatch):
-        #     for ch in self.chiral_data:
-        #         if ch.is_valid():
-        #             ch.grad(crds[i], grad[i])
-        #     for a in self.angle_data:
-        #         if a.is_valid():
-        #             a.grad(crds[i], grad[i])
-        #     for b in self.bond_data:
-        #         if b.is_valid():
-        #             b.grad(crds[i], grad[i])
-        # print(f"CPU {grad=}")
-
-        # gpu_grad = self.torch_impl.grad(crds)
-        # print(f"{gpu_grad=}")
-        # print(f"{gpu_grad.cpu().numpy() - grad}")
