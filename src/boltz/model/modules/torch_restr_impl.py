@@ -217,6 +217,29 @@ class RestrTorchImpl:
 
         return pot.sum()
 
+    def calc_vdw_grad(
+        self,
+        atom_pos: torch.Tensor,
+        grad: torch.Tensor,
+    ) -> torch.Tensor:
+        """Calculate the bond force based on the positions and indices of atoms."""
+        dist, unit_vec, _ = calculate_distances(atom_pos, self.vdw_idx)
+
+        r0 = 2.5
+        vdw_k = 1.0
+
+        # print(f"{dist=}")
+        x = dist - r0
+        flag = x < 0
+        pot = vdw_k * x * x * flag
+        force = 2.0 * vdw_k * x * flag
+
+        forcevec = unit_vec * force[:, None]
+        grad.index_add_(0, self.vdw_idx[:, 0], forcevec)
+        grad.index_add_(0, self.vdw_idx[:, 1], -forcevec)
+
+        return pot.sum()
+
     def grad(self, crds):
         device = self.device
         # gpu_crds = torch.tensor(crds).to(device).reshape(-1, 3)
@@ -227,6 +250,9 @@ class RestrTorchImpl:
         f = self.calc_bond_grad(gpu_crds, gpu_grad)
         f += self.calc_angle_grad(gpu_crds, gpu_grad)
         f += self.calc_chiral_grad(gpu_crds, gpu_grad)
+
+        if self.vdw_idx is not None:
+            f += self.calc_vdw_grad(gpu_crds, gpu_grad)
 
         # print(f"{f.shape=}")
         gpu_grad = gpu_grad.reshape(-1)

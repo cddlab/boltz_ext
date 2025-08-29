@@ -12,6 +12,7 @@ from .angle_restr_data import AngleData, get_angle_idxs
 from .bond_restr_data import BondData
 
 from .torch_restr_impl import RestrTorchImpl, MyScalarFunc
+import torch_cluster
 
 
 class Restraints:
@@ -213,15 +214,46 @@ class Restraints:
     def setup_site(self, feat_restr_in: torch.Tensor, nbatch: int) -> None:
         """Set up the restraintsites."""
         self.reset_indices()
+        device = feat_restr_in.device
         feat_restr = feat_restr_in[0].detach().cpu().numpy()
-
+        natoms = len(feat_restr)
         self.active_sites = []
-        for ind in range(len(feat_restr)):
+
+        for ind in range(natoms):
             sid = int(feat_restr[ind])
             if sid == 0:
                 continue
             self.active_sites.append(ind)
+
+        if self.gpu:
+            # for vdw force calc
+            self.ligand_idx = self.active_sites
+            self.prot_idx = [i for i in range(natoms) if i not in self.active_sites]
+            self.lig_batch = torch.arange(nbatch, device=device).repeat_interleave(
+                len(self.ligand_idx)
+            )
+            self.prot_batch = torch.arange(nbatch, device=device).repeat_interleave(
+                len(self.prot_idx)
+            )
+            print(f"{self.lig_batch=}")
+            print(f"{self.prot_batch=}")
+
+            self.lind_flat = (
+                torch.tensor(self.ligand_idx, device=device).repeat(nbatch)
+                + self.lig_batch * natoms
+            )
+            self.pind_flat = (
+                torch.tensor(self.prot_idx, device=device).repeat(nbatch)
+                + self.prot_batch * natoms
+            )
+            print(f"{self.lind_flat=}")
+            print(f"{self.pind_flat=}")
+
+            # all atoms are active sites
+            self.active_sites = np.arange(natoms)
+
         print(f"{len(self.active_sites)=}")
+        print(f"{self.active_sites=}")
         if len(self.active_sites) == 0:
             return
 
@@ -242,7 +274,6 @@ class Restraints:
         if self.gpu:
             natoms = len(self.active_sites)
             print(f"GPU {nbatch=}, {natoms=}")
-            device = feat_restr_in.device
             self.torch_impl = RestrTorchImpl(
                 self.bond_data,
                 self.angle_data,
@@ -251,6 +282,7 @@ class Restraints:
                 natoms,
                 device,
             )
+
         self.show_start()
 
     def show_start(self) -> None:
@@ -260,7 +292,8 @@ class Restraints:
 
     def print_stat_tensor(self, crds_in) -> None:
         crds = crds_in.detach().cpu().numpy()
-        crds = crds[:, self.active_sites, :]
+        if not self.gpu:
+            crds = crds[:, self.active_sites, :]
         self.print_stat(crds)
 
     def print_stat(self, crds) -> None:
@@ -349,7 +382,53 @@ class Restraints:
 
     def minimize_gpu(self, crds_in: torch.Tensor, istep: int) -> None:
         """Minimize the restraints."""
-        crds = crds_in[:, self.active_sites, :]
+        # crds = crds_in[:, self.active_sites, :]
+        crds = crds_in
+        vdw_thr = 5.0
+        # print(f"{crds.shape=} {crds.device=}")
+        prot_crds = crds[:, self.prot_idx, :].reshape(-1, 3)
+        lig_crds = crds[:, self.ligand_idx, :].reshape(-1, 3)
+
+        # print(f"{prot_crds.shape=}")
+        # print(f"{lig_crds.shape=}")
+        # d = prot_crds[:, None, :] - lig_crds[None, :, :]
+        # dist = torch.sqrt((d * d).sum(dim=2))
+        # dist = torch.where(dist < vdw_thr)
+        # # calc indices for dist < vdw_thr
+        # print(f"{dist=}")
+        # # print(f"{dist.sum()=}")
+
+        idx_j, idx_i = torch_cluster.radius(
+            x=prot_crds,
+            y=lig_crds,
+            batch_x=self.prot_batch,
+            batch_y=self.lig_batch,
+            r=vdw_thr,
+        )
+        if len(idx_i) > 0:
+            # print(f"{idx_i=}")
+            idx_i = self.pind_flat[idx_i]
+            # print(f"{self.prot_idx=}")
+            # print(f"{idx_i=}")
+
+            # print(f"{idx_j=}")
+            idx_j = self.lind_flat[idx_j]
+            # print(f"{self.ligand_idx=}")
+            # print(f"{idx_j=}")
+
+            vdw_idx = torch.stack([idx_i, idx_j], dim=1)
+            self.torch_impl.vdw_idx = vdw_idx
+        else:
+            self.torch_impl.vdw_idx = None
+
+        # print(f"{vdw_idx.shape=}")
+        # print(f"{vdw_idx=}")
+        # grad = torch.zeros_like(crds[0])
+        # vdw_e = self.torch_impl.calc_vdw_grad(crds[0], vdw_idx, grad)
+        # print(f"{vdw_e=}")
+        # print(f"{grad[idx_i]=}")
+
+        ##########
 
         options = {"max_iter": self.max_iter, "gtol": 1e-3}
         func = MyScalarFunc(self.torch_impl, x_shape=crds.shape)
@@ -362,7 +441,8 @@ class Restraints:
         # if self.verbose:
         #     self.print_stat(crds)
 
-        crds_in[:, self.active_sites, :] = opt.x
+        # crds_in[:, self.active_sites, :] = opt.x
+        crds_in[:] = opt.x
 
         print(f"step {istep} done")
 
