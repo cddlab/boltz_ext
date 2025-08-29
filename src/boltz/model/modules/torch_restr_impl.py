@@ -154,6 +154,7 @@ class RestrTorchImpl:
 
         self.vdw_r0 = config.get("r0", 2.5)
         self.vdw_dmax = config.get("dmax", 5.0)
+        self.vdw_lig_only = config.get("ligand_only", False)
 
     def update_vdw_idx(self, crds: torch.Tensor) -> None:
         vdw_thr = self.vdw_dmax
@@ -297,7 +298,8 @@ class RestrTorchImpl:
 
         forcevec = unit_vec * force[:, None]
         # protein
-        # grad.index_add_(0, self.vdw_idx[:, 0], forcevec)
+        if not self.vdw_lig_only:
+            grad.index_add_(0, self.vdw_idx[:, 0], forcevec)
         # ligand
         grad.index_add_(0, self.vdw_idx[:, 1], -forcevec)
 
