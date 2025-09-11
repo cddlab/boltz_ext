@@ -6,6 +6,8 @@ from .angle_restr_data import AngleData
 from .chiral_data import ChiralData
 from torchmin.function import sf_value, ScalarFunction, de_value
 import torch_cluster
+import numpy as np
+from rdkit import Chem
 
 
 def calculate_distances(atom_pos: torch.Tensor, atom_idx: torch.Tensor):
@@ -39,7 +41,6 @@ class RestrTorchImpl:
         self.setup_bonds(bond_data, nbatch, natoms)
         self.setup_angles(angle_data, nbatch, natoms)
         self.setup_chirals(chiral_data, nbatch, natoms)
-        # self.setup_vdw(natoms, nbatch)
 
     def setup_bonds(
         self,
@@ -122,8 +123,34 @@ class RestrTorchImpl:
         # print(f"Chiral r0s: {gpu_r0s=}")
         # return atom_idx, gpu_r0s
 
+    def setup_vdw_radii(self, elems_oh):
+        elems = torch.argmax(elems_oh[0], dim=-1).cpu().numpy()  # (nbatch, natoms,)
+        # print(f"VdW elems: {elems.shape=}")
+        # print(f"VdW elems: {elems=}")
+        peri = Chem.rdchem.GetPeriodicTable()
+
+        def elem2rvdw(x):
+            try:
+                if x < 1 or x > 118:
+                    return 0.0
+                return peri.GetRvdw(int(x))
+            except Exception as e:
+                print(f"elem2rvdw: {x}: {e}")
+                return 0.0
+
+        vdwr = np.vectorize(elem2rvdw)(elems)
+        # print(f"{vdwr.shape=}")
+        # print(f"{vdwr=}")
+        return torch.tensor(vdwr, device=elems_oh.device, dtype=torch.float)
+
     def setup_vdw(
-        self, natoms: int, nbatch: int, ligand_atoms: list[int], config
+        self,
+        nbatch: int,
+        natoms: int,
+        atom_mask,
+        ligand_atoms: list[int],
+        elems: torch.Tensor,
+        config: dict,
     ) -> None:
         self.vdw_k = config.get("weight", None)
         if self.vdw_k is None or self.vdw_k <= 0:
@@ -132,8 +159,14 @@ class RestrTorchImpl:
             self.use_vdw = True
 
         device = self.device
-        self.ligand_idx = ligand_atoms
-        self.prot_idx = [i for i in range(natoms) if i not in ligand_atoms]
+        atoms = np.arange(natoms)[atom_mask[0].bool().cpu().numpy()]
+
+        self.ligand_idx = torch.tensor(ligand_atoms, device=device, dtype=torch.long)
+        self.prot_idx = torch.tensor(
+            [i for i in atoms if i not in ligand_atoms],
+            device=device,
+            dtype=torch.long,
+        )
         self.lig_batch = torch.arange(nbatch, device=device).repeat_interleave(
             len(self.ligand_idx)
         )
@@ -143,18 +176,21 @@ class RestrTorchImpl:
         # print(f"{self.lig_batch=}")
         # print(f"{self.prot_batch=}")
 
-        self.lind_flat = (
-            torch.tensor(self.ligand_idx, device=device).repeat(nbatch)
-            + self.lig_batch * natoms
-        )
-        self.pind_flat = (
-            torch.tensor(self.prot_idx, device=device).repeat(nbatch)
-            + self.prot_batch * natoms
-        )
+        self.lind_flat = self.ligand_idx.repeat(nbatch) + self.lig_batch * natoms
+        self.pind_flat = self.prot_idx.repeat(nbatch) + self.prot_batch * natoms
 
-        self.vdw_r0 = config.get("r0", 2.5)
-        self.vdw_dmax = config.get("dmax", 5.0)
-        self.vdw_lig_only = config.get("ligand_only", False)
+        if self.use_vdw:
+            vdwr = self.setup_vdw_radii(elems)
+            self.vdwr = vdwr.repeat(nbatch)
+            # print(f"{self.vdwr.shape=}")
+
+            self.vdw_scale = config.get("scale", 0.75)
+            self.vdw_dmax = config.get("dmax", 5.0)
+            self.vdw_lig_only = config.get("ligand_only", False)
+            print(
+                f"Use VdW restr scale={self.vdw_scale}, dmax={self.vdw_dmax},"
+                f" ligand_only={self.vdw_lig_only}"
+            )
 
     def update_vdw_idx(self, crds: torch.Tensor) -> None:
         vdw_thr = self.vdw_dmax
@@ -175,13 +211,22 @@ class RestrTorchImpl:
             idx_j = self.lind_flat[idx_j]
 
             # print(f"{self.prot_idx=}")
-            # print(f"{idx_i=}")
+            # print(f"{max(idx_i)=}")
 
             # print(f"{self.ligand_idx=}")
-            # print(f"{idx_j=}")
+            # print(f"{max(idx_j)=}")
 
             vdw_idx = torch.stack([idx_i, idx_j], dim=1)
             self.vdw_idx = vdw_idx
+
+            lig_vdwr_cur = self.vdwr[vdw_idx[:, 1]]
+            # print(f"{vdw_idx[:, 1]=}")
+            # print(f"{lig_vdwr_cur=}")
+            prot_vdwr_cur = self.vdwr[vdw_idx[:, 0]]
+            # print(f"{vdw_idx[:, 0]=}")
+            # print(f"{prot_vdwr_cur=}")
+            self.vdw_r0s = (prot_vdwr_cur + lig_vdwr_cur) * self.vdw_scale
+            # print(f"{self.vdw_r0s=}")
         else:
             self.vdw_idx = None
 
@@ -290,8 +335,9 @@ class RestrTorchImpl:
         """Calculate the vdw contact gradients."""
         dist, unit_vec, _ = calculate_distances(atom_pos, self.vdw_idx)
 
-        # print(f"{dist=}")
-        x = dist - self.vdw_r0
+        # print(f"{dist.shape=}")
+        # print(f"{self.vdw_r0s.shape=}")
+        x = dist - self.vdw_r0s
         flag = x < 0
         pot = self.vdw_k * x * x * flag
         force = 2.0 * self.vdw_k * x * flag
@@ -310,19 +356,21 @@ class RestrTorchImpl:
         atom_pos: torch.Tensor,
     ) -> torch.Tensor:
         """Show the vdw contact status."""
+        if self.vdw_idx is None:
+            return
         atom_pos = atom_pos.reshape(-1, 3)
 
         idx = (self.vdw_idx // self.natoms)[:, 0]
         dist, unit_vec, _ = calculate_distances(atom_pos, self.vdw_idx)
 
-        x = dist - self.vdw_r0
+        x = dist - self.vdw_r0s
         flag = x < 0
 
         for ib in range(self.nbatch):
             print(f"Protein-Ligand contacts: batch {ib}")
             d = dist[idx == ib]
             f = flag[idx == ib]
-            print(f"  num of d < {self.vdw_r0}: {int(f.sum())}")
+            print(f"  num of d < {self.vdw_scale}: {int(f.sum())}")
             print(f"  min dist: {float(d.min())}")
 
     def grad(self, crds: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

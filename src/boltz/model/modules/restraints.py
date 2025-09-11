@@ -4,7 +4,6 @@ import itertools
 
 import numpy as np
 import torch
-from rdkit import Chem
 from scipy import optimize
 import torchmin
 from .chiral_data import ChiralData, calc_chiral_vol
@@ -212,8 +211,12 @@ class Restraints:
             return None
         return self.sites[index - 1]
 
-    def setup_site(self, feat_restr_in: torch.Tensor, nbatch: int) -> None:
+    def setup_site(self, feats: dict[str, torch.Tensor], nbatch: int) -> None:
         """Set up the restraintsites."""
+        # print(f"=== setup sites === {list(feats.keys())}")
+        # print(f"{feats['atom_pad_mask']=}")
+        atom_mask = feats["atom_pad_mask"]
+        feat_restr_in = feats["ref_restraint"]
         self.reset_indices()
         device = feat_restr_in.device
         feat_restr = feat_restr_in[0].detach().cpu().numpy()
@@ -260,8 +263,14 @@ class Restraints:
                 natoms,
                 device,
             )
-            self.torch_impl.setup_vdw(natoms, nbatch, ligand_atoms, self.vdw_config)
-            
+            self.torch_impl.setup_vdw(
+                nbatch,
+                natoms,
+                atom_mask=atom_mask,
+                ligand_atoms=ligand_atoms,
+                elems=feats["ref_element"],
+                config=self.vdw_config,
+            )
 
         self.show_start()
 
@@ -323,8 +332,6 @@ class Restraints:
                 print(f"  angle E={a_ene:.5f}")
                 a_rmsd = np.sqrt(a_sd / len(self.angle_data))
                 print(f"  angle rmsd={a_rmsd:.5f}")
-
-                
 
     def minimize(self, batch_crds_in: torch.Tensor, istep: int, sigma_t: float) -> None:
         """Minimize the restraints."""
@@ -444,4 +451,3 @@ class Restraints:
             b.reset_indices()
         for a in self.angle_data:
             a.reset_indices()
-

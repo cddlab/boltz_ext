@@ -456,7 +456,7 @@ class AtomDiffusion(Module):
     ):
         feats = network_condition_kwargs["feats"]
         restr = Restraints.get_instance()
-        restr.setup_site(feats["ref_restraint"], nbatch=multiplicity)
+        restr.setup_site(feats, nbatch=multiplicity)
 
         num_sampling_steps = default(num_sampling_steps, self.num_sampling_steps)
         atom_mask = atom_mask.repeat_interleave(multiplicity, 0)
