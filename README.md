@@ -1,3 +1,171 @@
+# Boltz Extension with Restraint-Guided Inference
+
+This repository contains an extended version of Boltz-1 that implements restraint-guided inference to improve stereochemical accuracy in protein-ligand complex structure prediction.
+This method addresses limitations in ligand stereochemistry reproduction found in Boltz-1, achieving 100% success rate in chirality reproduction while maintaining comparable binding pose prediction performance.
+
+## Key Features
+
+- **Perfect Chirality Reproduction**: Achieves 100% accuracy in reproducing input ligand chirality
+- **Improved Bond and Angle Geometry**: Significantly reduces Bond RMSD and Angle RMSD compared to baseline models
+- **No Model Retraining Required**: Applies stereochemical restraints during the reverse diffusion process without modifying the neural network
+- **GPU Acceleration**: Includes both CPU and GPU implementations for efficient constraint calculations
+- **Maintains Binding Accuracy**: Preserves protein structure and protein-ligand contact quality while fixing stereochemical errors
+
+## Installation
+
+### Prerequisites
+
+First, install PyTorch and torch-cluster. The torch-cluster installation depends on your PyTorch and CUDA versions.
+
+For PyTorch 2.1.0, install torch-cluster as follows:
+
+```bash
+pip install torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+${CUDA}.html
+```
+
+Replace `${CUDA}` with your CUDA version string (e.g., `cu121` for CUDA 12.1, `cu118` for CUDA 11.8, or `cpu` for CPU-only installation).
+
+Examples:
+```bash
+# For CUDA 12.1
+pip install torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+
+# For CUDA 11.8  
+pip install torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cu118.html
+
+# For CPU only
+pip install torch-cluster -f https://data.pyg.org/whl/torch-2.1.0+cpu.html
+```
+
+### Install Boltz Extension
+
+```bash
+git clone https://github.com/cddlab/boltz_ext.git
+cd boltz_ext
+git checkout restr_torch
+pip install -e .
+```
+
+## Configuration
+
+### Basic Configuration
+
+To enable restraint-guided inference, you need to modify your configuration YAML file in two places:
+
+1. **Enable chiral restraints for ligands**: Add `chiral_restraints: true` at the same level as ligand `ccd` or `smiles` entries
+2. **Configure restraint parameters**: Add a top-level `restraints_config` section
+
+### Configuration Format
+
+#### Ligand-level Configuration
+
+```yaml
+sequences:
+  - protein: 
+      id: "A"
+      sequence: "MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
+  - ligand:
+      ccd: "SAH"  # or smiles: "N[C@H](Cc1ccc(O)cc1)C(=O)O"
+      chiral_restraints: true  # Add this line to enable restraints for this ligand
+```
+
+#### Top-level Restraints Configuration
+
+```yaml
+restraints_config:
+  angle:
+    weight: 1        # Weight for angle restraints
+  bond:
+    weight: 1        # Weight for bond length restraints  
+  chiral:
+    weight: 1        # Weight for chiral volume restraints
+  start_sigma: 1.0   # Sigma threshold for starting restraint application
+  gpu: true          # Enable GPU acceleration (optional, default: false)
+```
+
+### Complete Configuration Example
+
+```yaml
+sequences:
+  - protein:
+      id: "A" 
+      sequence: "MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
+  - ligand:
+      smiles: "CC(C)CC([C@@H](C(=O)O)N)"
+      chiral_restraints: true
+
+restraints_config:
+  angle:
+    weight: 1
+  bond:  
+    weight: 1
+  chiral:
+    weight: 1
+  start_sigma: 1.0
+  gpu: true
+```
+
+### Configuration Options
+
+#### Parameters
+
+- **`weight`**: Relative weight for each restraint type (default: 1)
+- **`start_sigma`**: Sigma threshold below which restraints are applied (default: 1.0)
+- **`gpu`**: Enable GPU-accelerated constraint calculations (default: false)
+  - Highly recommended for large ligands or multiple diffusion samples
+
+#### Restraint Combinations
+
+You can use different combinations of restraints:
+
+```yaml
+# Chirality only (Boltz Rc in paper)
+restraints_config:
+  chiral:
+    weight: 1
+  bond:
+    weight: 0
+  chiral:
+    weight: 0
+  start_sigma: 1.0
+
+# All restraints (Boltz R in paper)  
+restraints_config:
+  angle:
+    weight: 1
+  bond:
+    weight: 1
+  chiral:
+    weight: 1
+  start_sigma: 1.0
+
+# Final step only (Boltz R1 in paper)
+restraints_config:
+  angle:
+    weight: 1
+  bond:
+    weight: 1  
+  chiral:
+    weight: 1
+  start_sigma: 0.005
+```
+
+## Citation
+
+If you use this code in your research, please cite:
+
+```bibtex
+@article{ishitani2025improving,
+  title={Improving Stereochemical Limitations in Protein-Ligand Complex Structure Prediction},
+  author={Ishitani, Ryuichiro and Moriwaki, Yoshitaka},
+  journal={bioRxiv},
+  year={2025},
+  publisher={Cold Spring Harbor Laboratory},
+  doi={10.1101/2025.03.25.645362}
+}
+```
+---
+
 <h1 align="center">Boltz-1:
 
 Democratizing Biomolecular Interaction Modeling
