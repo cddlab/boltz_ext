@@ -42,6 +42,8 @@ class RestrTorchImpl:
         self.setup_angles(angle_data, nbatch, natoms)
         self.setup_chirals(chiral_data, nbatch, natoms)
 
+        self.vdw_dmax = 5.0
+
     def setup_bonds(
         self,
         bond_data: list[BondData],
@@ -193,6 +195,9 @@ class RestrTorchImpl:
             )
 
     def update_vdw_idx(self, crds: torch.Tensor) -> None:
+        """Update the vdw contact indices based on the current coordinates."""
+        if not self.use_vdw:
+            return
         vdw_thr = self.vdw_dmax
         # print(f"{crds.shape=} {crds.device=}")
         prot_crds = crds[:, self.prot_idx, :].reshape(-1, 3)
