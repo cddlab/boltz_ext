@@ -371,7 +371,7 @@ class Restraints:
 
         if self.verbose:
             self.print_stat(crds)
-        print(f"step {istep} done")
+            print(f"step {istep} done")
 
     def minimize_gpu(self, crds_in: torch.Tensor, istep: int) -> None:
         """Minimize the restraints."""
