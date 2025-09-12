@@ -396,7 +396,8 @@ class Restraints:
         # crds_in[:, self.active_sites, :] = opt.x
         crds_in[:] = opt.x
 
-        print(f"step {istep} done")
+        if self.verbose:
+            print(f"step {istep} done")
 
     def finalize(self, batch_crds_in: torch.Tensor, istep: int) -> None:
         """Finalize the restraints."""
