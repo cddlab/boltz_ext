@@ -43,6 +43,7 @@ class RestrTorchImpl:
         self.setup_chirals(chiral_data, nbatch, natoms)
 
         self.vdw_dmax = 5.0
+        self.vdw_idx = None
 
     def setup_bonds(
         self,
