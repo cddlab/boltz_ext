@@ -28,6 +28,8 @@ dependencies = [
     "pyyaml==6.0.2",
     "biopython==1.84",
     "scipy==1.13.1",
+    "torch_cluster",
+    "pytorch-minimize @ git+https://github.com/ishitani/pytorch-minimize.git@nobackprop",
 ]
 
 [project.scripts]

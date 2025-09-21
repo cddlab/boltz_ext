@@ -34,6 +34,7 @@ from boltz.model.modules.utils import (
     default,
     log,
 )
+from boltz.model.modules.restraints import Restraints
 
 
 class DiffusionModule(Module):
@@ -453,6 +454,10 @@ class AtomDiffusion(Module):
         train_accumulate_token_repr=False,
         **network_condition_kwargs,
     ):
+        feats = network_condition_kwargs["feats"]
+        restr = Restraints.get_instance()
+        restr.setup_site(feats, nbatch=multiplicity)
+
         num_sampling_steps = default(num_sampling_steps, self.num_sampling_steps)
         atom_mask = atom_mask.repeat_interleave(multiplicity, 0)
 
@@ -473,6 +478,7 @@ class AtomDiffusion(Module):
         token_a = None
 
         # gradually denoise
+        i = 0
         for sigma_tm, sigma_t, gamma in sigmas_and_gammas:
             atom_coords, atom_coords_denoised = center_random_augmentation(
                 atom_coords,
@@ -503,6 +509,7 @@ class AtomDiffusion(Module):
                         **network_condition_kwargs,
                     ),
                 )
+            restr.minimize(atom_coords_denoised, i, sigma_t)
 
             if self.accumulate_token_repr:
                 if token_repr is None:
@@ -534,9 +541,12 @@ class AtomDiffusion(Module):
                 atom_coords_noisy
                 + self.step_scale * (sigma_t - t_hat) * denoised_over_sigma
             )
+            # print(f"{i=}, {sigma_t=}, {t_hat=}, {sigma_t/t_hat=}")
 
             atom_coords = atom_coords_next
+            i += 1
 
+        restr.finalize(atom_coords, i)
         return dict(sample_atom_coords=atom_coords, diff_token_repr=token_repr)
 
     def loss_weight(self, sigma):
